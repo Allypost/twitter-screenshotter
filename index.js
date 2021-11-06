@@ -13,6 +13,8 @@ const PORT = process.env.PORT || 80;
 const REQUESTS_PER_SECOND = 1;
 const REQUESTS_MEASURE_WINDOW_SECONDS = 1 * 60; // 1 minute
 
+const SEND_CACHE_HEADER_FOR_SECONDS = 15 * 60 // 15 minutes
+
 const EMBED_HTML = fs.readFileSync('./embed.html', 'utf-8');
 
 /**
@@ -117,6 +119,7 @@ app.post("/", speedLimiter, asyncReq(async (req, res) => {
   res.setHeader('Content-Type', 'image/png');
   res.setHeader('Content-Length', buffer.length);
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`);
 
   return res.end(buffer);
 }));
