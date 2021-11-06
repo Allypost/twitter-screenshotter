@@ -124,6 +124,72 @@ app.post("/", speedLimiter, asyncReq(async (req, res) => {
   return res.end(buffer);
 }));
 
+app.get("/*", speedLimiter, asyncReq(async (req, res) => {
+  const twitterUrl = req.params[0];
+
+  if (!twitterUrl) {
+    return res.sendStatus(StatusCodes.NOT_ACCEPTABLE);
+  }
+
+  const parsedUrl = new URL(twitterUrl);
+
+  if (parsedUrl.hostname !== 'twitter.com') {
+    return res.sendStatus(StatusCodes.NOT_ACCEPTABLE);
+  }
+
+  req.$page = {};
+
+  req.$page.context = await BROWSER.newContext({
+    acceptDownloads: false,
+    screen: {
+      width: 1920,
+      height: 1080,
+    },
+  });
+  req.$page.page = await req.$page.context.newPage();
+  await req.$page.page.setContent(EMBED_HTML.replace(
+    '{{URL_FOR_TWITTER}}',
+    twitterUrl,
+  ));
+
+  const tweetIframe = await req.$page.page.waitForSelector('.twitter-tweet-rendered iframe');
+  const frame = await tweetIframe.contentFrame();
+
+  {
+    const retweetLink = await frame.$$('a[role="link"]').then((links) => links.pop());
+
+    retweetLink.evaluate((el) => {
+      const $retweetDiv = el.parentNode;
+      $retweetDiv.parentNode.removeChild($retweetDiv);
+    });
+  }
+
+  {
+    const copyLinkToTweetLink = await frame.$('a[role="link"][aria-label^="Like."]');
+
+    copyLinkToTweetLink.evaluate((el) => {
+      const $actions = el.parentNode;
+      const $copyLinkToTweet = $actions.querySelector('div[role="button"]');
+
+      $copyLinkToTweet.parentNode.removeChild($copyLinkToTweet);
+    });
+  }
+
+  const tweet = await frame.$('#app');
+
+  const buffer = await tweet.screenshot({
+    omitBackground: true,
+    type: "png",
+  });
+
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Content-Length', buffer.length);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`);
+
+  return res.end(buffer);
+}));
+
 Promise.resolve()
   .then(async () => {
     BROWSER = await chromium.launch();
