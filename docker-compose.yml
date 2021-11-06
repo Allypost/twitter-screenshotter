@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    environment:
+      PORT: 8000
+      HOST: "0.0.0.0"
+      REDIS_URL: "redis://redis-store:6379/3"
+    ports:
+      - "8081:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      - redis-store
+
+  redis-store:
+    image: redis:alpine

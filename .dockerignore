@@ -1,0 +1,14 @@
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+.dockerignore
+
+.env
+
+.git
+.gitignore
+
+node_modules
+
+.vscode
+.idea
