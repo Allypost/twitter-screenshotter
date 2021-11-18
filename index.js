@@ -46,7 +46,8 @@ app.disable('x-powered-by');
 app.enable("trust proxy");
 
 app.use(morgan('combined'));
-app.use(bodyParser.json());
+
+app.use(bodyParser.urlencoded());
 
 const slowDownOptions = {
   windowMs: REQUESTS_MEASURE_WINDOW_SECONDS * 1000,
@@ -63,6 +64,21 @@ if (process.env.REDIS_URL && String(process.env.REDIS_URL).trim().length > 0) {
 }
 
 const speedLimiter = slowDown(slowDownOptions);
+
+const indexFile = fs.readFileSync("./index.html");
+
+app.get("/", (req, res) => {
+  res
+    .end(indexFile);
+});
+
+app.post("/", (req, res) => {
+  if (!req.body || !req.body.url) {
+    return res.sendStatus(StatusCodes.NOT_ACCEPTABLE);
+  }
+
+  res.redirect(`/${req.body.url}`).end();
+});
 
 app.get("/*", speedLimiter, asyncReq(async (req, res) => {
   const twitterUrl = req.params[0];
