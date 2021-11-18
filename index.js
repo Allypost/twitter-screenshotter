@@ -48,15 +48,21 @@ app.enable("trust proxy");
 app.use(morgan('combined'));
 app.use(bodyParser.json());
 
-const speedLimiter = slowDown({
+const slowDownOptions = {
   windowMs: REQUESTS_MEASURE_WINDOW_SECONDS * 1000,
   delayAfter: REQUESTS_PER_SECOND * REQUESTS_MEASURE_WINDOW_SECONDS,
   delayMs: 734,
   headers: true,
-  store: new RedisStore({
+};
+
+if (process.env.REDIS_URL && String(process.env.REDIS_URL).trim().length > 0) {
+  console.log('|>', process.env.REDIS_URL)
+  slowDownOptions.store = new RedisStore({
     redisURL: process.env.REDIS_URL,
-  }),
-});
+  });
+}
+
+const speedLimiter = slowDown(slowDownOptions);
 
 app.get("/*", speedLimiter, asyncReq(async (req, res) => {
   const twitterUrl = req.params[0];
