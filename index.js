@@ -8,7 +8,7 @@ const slowDown = require("express-slow-down");
 const RedisStore = require("rate-limit-redis");
 
 const HOST = process.env.HOST || 'localhost';
-const PORT = process.env.PORT || 80;
+const PORT = process.env.PORT || 8080;
 
 const REQUESTS_PER_SECOND = 1;
 const REQUESTS_MEASURE_WINDOW_SECONDS = 1 * 60; // 1 minute
