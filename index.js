@@ -114,7 +114,7 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
 
   req.$page = {};
 
-  req.$page.context = await BROWSER.newContext({
+  const context = await BROWSER.newContext({
     acceptDownloads: false,
     locale: 'en-US',
     viewport: {
@@ -126,13 +126,15 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
       height: BROWSER_INFO.height,
     },
   });
-  req.$page.page = await req.$page.context.newPage();
-  await req.$page.page.setContent(EMBED_HTML.replace(
+  req.$page.context = context;
+  const page = await context.newPage();
+  await page.setContent(EMBED_HTML.replace(
     '{{URL_FOR_TWITTER}}',
     twitterUrl,
   ));
+  req.$page.page = page;
 
-  const tweetIframe = await req.$page.page.waitForSelector('.twitter-tweet-rendered iframe');
+  const tweetIframe = await page.waitForSelector('.twitter-tweet-rendered iframe');
   const frame = await tweetIframe.contentFrame();
 
   {
@@ -153,6 +155,27 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
 
       $copyLinkToTweet.parentNode.removeChild($copyLinkToTweet);
     });
+  }
+
+  // Show sensitive media
+  {
+    const tweetText$ = await frame.$('data-testid=tweetText');
+
+    const clicked = await tweetText$.evaluate(($tweetText) => {
+      const $tweetContents = $tweetText.parentNode.parentNode;
+      const $viewBtn = $tweetContents.querySelector('[role="button"]');
+      if (!$viewBtn || !$viewBtn.innerText === 'View') {
+        return false;
+      }
+
+      $viewBtn.click();
+      return true;
+    });
+
+    if (clicked) {
+      const req = await page.waitForRequest('https://*.twimg.com/**');
+      await req.response();
+    }
   }
 
   const tweet = await frame.$('#app');
