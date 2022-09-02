@@ -178,6 +178,68 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
     }
   }
 
+  // Remove reply stuff
+  {
+    const tweetText$ = await frame.$('data-testid=tweetText');
+
+    await tweetText$.evaluate(($tweetText, data) => {
+      const $backlinks = document.querySelectorAll(`a[href*="twitter.com${data.pathname}"]`);
+
+      for (const $backlink of $backlinks) {
+        if ($backlink.textContent === 'Read the full conversation on Twitter') {
+          const $container = $backlink.parentNode.parentNode;
+          $container.parentNode.removeChild($container);
+          break;
+        }
+      }
+
+      const $tweetContents = $tweetText.parentNode.parentNode;
+      const $tweet = $tweetContents.parentNode;
+
+      const hasSiblings = $tweet.childNodes.length > 1;
+
+      if (!hasSiblings) {
+        return;
+      }
+
+      $tweet.removeChild($tweet.childNodes[0]);
+    }, {
+      pathname: parsedUrl.pathname,
+    });
+  }
+
+  // Remove Twitter branding
+  {
+    const body$ = await frame.$('body');
+    await body$.evaluate((document, data) => {
+      const $backlinks = document.querySelectorAll(`a[href*="twitter.com${data.pathname}"]`);
+      for (const $backlink of $backlinks) {
+        if ($backlink.textContent.includes('·')) {
+          continue;
+        }
+
+        if ($backlink.querySelector('img[src^="https://pbs.twimg.com"]')) {
+          continue;
+        }
+
+        $backlink.parentNode.removeChild($backlink);
+      }
+
+      const $infoBtn = document.querySelector('[aria-label="Twitter Ads info and privacy"]');
+      if ($infoBtn) {
+        $infoBtn.parentNode.removeChild($infoBtn);
+      }
+
+      const $followBtn = document.querySelector('a[href^="https://twitter.com/intent/follow"]');
+      if ($followBtn) {
+        const $followBtnContainer = $followBtn.parentNode;
+        $followBtnContainer.parentNode.removeChild($followBtnContainer);
+      }
+    }, {
+      pathname: parsedUrl.pathname,
+    });
+  }
+
   const tweet = await frame.$('#app');
 
   const buffer = await tweet.screenshot({
