@@ -35,6 +35,28 @@ const BROWSER_INFO = {
 
 const EMBED_HTML = fs.readFileSync('./embed.html', 'utf-8');
 
+class Logger {
+  #logInstance = console.log;
+
+  setLogger(log) {
+    this.#logInstance = log;
+  }
+
+  #log(...args) {
+    this.#logInstance(`[${new Date().toISOString()}]`, ...args.map((arg) => (arg)));
+  }
+
+  debug(...args) {
+    if (!IS_DEV) {
+      return;
+    }
+
+    this.#log('[DEBUG]', ...args);
+  }
+}
+
+const logger = new Logger();
+
 /**
  * @type {Browser}
  */
@@ -44,12 +66,15 @@ const asyncReq =
   (handler) => async (req, res) => {
     try {
       return await handler(req, res);
-    } catch {
+    } catch (e) {
+      logger.debug(e);
       return res.sendStatus(StatusCodes.INTERNAL_SERVER_ERROR);
     } finally {
       try {
         await req.$browserContext.close();
-      } catch { }
+      } catch (e) {
+        logger.debug(e);
+      }
     }
   }
   ;
@@ -89,6 +114,7 @@ const indexFile = fs.readFileSync("./index.html");
  * @returns {Promise<Buffer | null>} Screenshot buffer
  */
 const renderTweetPage = async (context, url) => {
+  logger.debug('Start rendering twitter page', url.toString());
   const page = await context.newPage();
 
   await page.goto(url.toString());
@@ -148,6 +174,7 @@ const renderTweetPage = async (context, url) => {
     });
 
     if (clicked) {
+      logger.debug('Enabled sensitive content');
       await page.waitForResponse('https://*.twimg.com/**');
     }
   }
@@ -174,6 +201,8 @@ const renderTweetPage = async (context, url) => {
  * @returns {Promise<Buffer>} Screenshot buffer
  */
 const renderTweetEmbedded = async (context, url) => {
+  logger.debug('Start rendering embedded page', url.toString());
+
   const page = await context.newPage();
   await page.setContent(EMBED_HTML.replace(
     '{{URL_FOR_TWITTER}}',
@@ -219,6 +248,7 @@ const renderTweetEmbedded = async (context, url) => {
     });
 
     if (clicked) {
+      logger.debug('Enabled sensitive content');
       await page.waitForResponse('https://*.twimg.com/**');
     }
   }
@@ -331,11 +361,14 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
    * @type {URL | null}
    */
   let parsedUrl = null;
-
   try {
     const twitterUrl = req.params[0];
+
+    logger.debug('Starting processing', twitterUrl);
+
     parsedUrl = new URL(twitterUrl);
-  } catch {
+  } catch (e) {
+    logger.debug('URL parse failed', twitterUrl, e);
   }
 
   if (!parsedUrl) {
@@ -378,6 +411,8 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
         });
       }),
     );
+
+    logger.debug('Tweet info', tweetInfo);
 
     if (!tweetInfo) {
       return res.sendStatus(StatusCodes.NOT_FOUND);
