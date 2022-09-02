@@ -72,6 +72,12 @@ app.get("/", (req, res) => {
     .end(indexFile);
 });
 
+const faviconFile = fs.readFileSync("./favicon.ico");
+app.get('/favicon.ico', (req, res) => {
+  res
+    .end(faviconFile);
+})
+
 app.post("/", (req, res) => {
   if (!req.body || !req.body.url) {
     return res.sendStatus(StatusCodes.UNSUPPORTED_MEDIA_TYPE);
