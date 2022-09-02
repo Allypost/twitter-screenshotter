@@ -26,6 +26,8 @@ RUN npm i -g pm2
 
 COPY yarn.lock package.json ./
 
+ENV NODE_ENV=production
+
 RUN yarn install --frozen-lockfile
 
 COPY . .
