@@ -176,6 +176,7 @@ const renderTweetPage = async (context, url) => {
     if (clicked) {
       logger.debug('Enabled sensitive content');
       await page.waitForResponse('https://*.twimg.com/**');
+      await page.waitForLoadState('networkidle');
     }
   }
 
@@ -250,6 +251,7 @@ const renderTweetEmbedded = async (context, url) => {
     if (clicked) {
       logger.debug('Enabled sensitive content');
       await page.waitForResponse('https://*.twimg.com/**');
+      await page.waitForLoadState('networkidle');
     }
   }
 
