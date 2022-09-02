@@ -79,25 +79,17 @@ const speedLimiter = slowDown(slowDownOptions);
 
 const indexFile = fs.readFileSync("./index.html");
 
-class TweetNotFoundError extends Error { }
-
-class TweetRenderError extends Error { }
-
 /**
  * 
  * @param {BrowserContext} context
  * @param {URL} url
  * 
- * @returns {Promise<Buffer>} Screenshot buffer
+ * @returns {Promise<Buffer | null>} Screenshot buffer
  */
 const renderTweetPage = async (context, url) => {
   const page = await context.newPage();
 
-  const resp = await page.goto(url.toString());
-
-  if (resp.status() !== 200) {
-    throw new TweetNotFoundError();
-  }
+  await page.goto(url.toString());
 
   const TWEET_SELECTOR = 'data-testid=tweet';
   await page.waitForSelector(TWEET_SELECTOR);
@@ -132,7 +124,7 @@ const renderTweetPage = async (context, url) => {
     });
 
     if (!hasActions) {
-      throw new TweetRenderError();
+      return null;
     }
   }
 
@@ -307,17 +299,11 @@ const renderTweetEmbedded = async (context, url) => {
  * 
  * @returns {Promise<Buffer>} Screenshot buffer
  */
-const renderTweet = async (context, url) => {
-  try {
-    return await renderTweetPage(context, url);
-  } catch (err) {
-    if (err instanceof TweetRenderError) {
-      return renderTweetEmbedded(context, url);
-    }
-
-    throw err;
-  }
-};
+const renderTweet =
+  (context, url) =>
+    renderTweetPage(context, url)
+      .then((data) => data || renderTweetEmbedded(context, url))
+  ;
 
 app.get("/", (req, res) => {
   res
@@ -410,23 +396,7 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
   });
   req.$browserContext = context;
 
-  /**
-   * @type {Buffer}
-   */
-  let buffer;
-  try {
-    buffer = await renderTweet(context, parsedUrl);
-  } catch (e) {
-    if (e instanceof TweetRenderError) {
-      return res.sendStatus(StatusCodes.FORBIDDEN);
-    }
-
-    if (e instanceof TweetNotFoundError) {
-      return res.sendStatus(StatusCodes.NOT_FOUND);
-    }
-
-    throw e;
-  }
+  const buffer = await renderTweet(context, parsedUrl);
 
   res.setHeader('Content-Type', `image/${BROWSER_INFO.screenshotType}`);
   res.setHeader('Content-Length', buffer.length);
