@@ -21,6 +21,8 @@ const REQUESTS_MEASURE_WINDOW_SECONDS = 1 * 60; // 1 minute
 
 const SEND_CACHE_HEADER_FOR_SECONDS = 15 * 60 // 15 minutes
 
+const IS_DEV = process.env.NODE_ENV !== 'production';
+
 const BROWSER_INFO = {
   width: 2160,
   height: 3840,
@@ -152,9 +154,9 @@ const renderTweetPage = async (context, url) => {
 
   // Add border radius to tweet to make it a bit more fancy
   {
-    tweet$.evaluate(($tweet) => {
+    await tweet$.evaluate(($tweet) => {
       $tweet.style.borderRadius = '12px';
-    })
+    });
   }
 
   return tweet$.screenshot({
@@ -184,7 +186,7 @@ const renderTweetEmbedded = async (context, url) => {
   {
     const retweetLink = await frame.$$('a[role="link"]').then((links) => links.pop());
 
-    retweetLink.evaluate((el) => {
+    await retweetLink.evaluate((el) => {
       const $retweetDiv = el.parentNode;
       $retweetDiv.parentNode.removeChild($retweetDiv);
     });
@@ -193,7 +195,7 @@ const renderTweetEmbedded = async (context, url) => {
   {
     const copyLinkToTweetLink = await frame.$('a[role="link"][aria-label^="Like."]');
 
-    copyLinkToTweetLink.evaluate((el) => {
+    await copyLinkToTweetLink.evaluate((el) => {
       const $actions = el.parentNode;
       const $copyLinkToTweet = $actions.querySelector('div[role="button"]');
 
@@ -405,6 +407,10 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
 
   return res.end(buffer);
 }));
+
+if (IS_DEV) {
+  console.clear();
+}
 
 Promise.resolve()
   .then(async () => {
