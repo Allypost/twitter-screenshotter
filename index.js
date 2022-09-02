@@ -120,9 +120,14 @@ const renderTweetPage = async (context, url) => {
 
   await page.goto(url.toString());
 
-  const TWEET_SELECTOR = 'data-testid=tweet';
-  await page.waitForSelector(TWEET_SELECTOR);
-  const tweet$ = await page.$(TWEET_SELECTOR);
+  await page.waitForSelector('data-testid=cellInnerDiv >> nth=0');
+
+  if (!await page.$('data-testid=cellInnerDiv >> nth=0 >> data-testid=tweet')) {
+    logger.debug('Tweet not available, reason:', await page.$('data-testid=cellInnerDiv >> nth=0').then((el) => el.innerText()));
+    return null;
+  }
+
+  const tweet$ = await page.$('data-testid=cellInnerDiv >> nth=0 >> data-testid=tweet >> ..');
 
   // Remove bottom popups (eg. Accept cookies, sign in, etc.)
   {
@@ -135,7 +140,7 @@ const renderTweetPage = async (context, url) => {
 
   // Remove tweet actions (eg. Like, Retweet, Reply, etc.)
   {
-    const hasActions = await tweet$.evaluate(($tweet) => {
+    await tweet$.evaluate(($tweet) => {
       const $likeBtn = $tweet.querySelector('[aria-label="Like"]');
 
       let $tweetActions = $likeBtn;
@@ -144,17 +149,11 @@ const renderTweetPage = async (context, url) => {
       }
 
       if (!$tweetActions) {
-        return false;
+        return;
       }
 
       $tweetActions.parentNode.removeChild($tweetActions);
-
-      return true;
     });
-
-    if (!hasActions) {
-      return null;
-    }
   }
 
   // Check for sensitive content popup
