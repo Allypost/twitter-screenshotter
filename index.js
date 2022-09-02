@@ -43,11 +43,7 @@ const asyncReq =
       return res.sendStatus(StatusCodes.INTERNAL_SERVER_ERROR);
     } finally {
       try {
-        await req.$page.page.close();
-      } catch { }
-
-      try {
-        await req.$page.context.close();
+        await req.$browserContext.close();
       } catch { }
     }
   }
@@ -112,8 +108,6 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
     return res.sendStatus(StatusCodes.FORBIDDEN);
   }
 
-  req.$page = {};
-
   const context = await BROWSER.newContext({
     acceptDownloads: false,
     locale: 'en-US',
@@ -126,13 +120,13 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
       height: BROWSER_INFO.height,
     },
   });
-  req.$page.context = context;
+  req.$browserContext = context;
+
   const page = await context.newPage();
   await page.setContent(EMBED_HTML.replace(
     '{{URL_FOR_TWITTER}}',
     twitterUrl,
   ));
-  req.$page.page = page;
 
   const tweetIframe = await page.waitForSelector('.twitter-tweet-rendered iframe');
   const frame = await tweetIframe.contentFrame();
