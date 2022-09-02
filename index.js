@@ -154,8 +154,7 @@ const renderTweetPage = async (context, url) => {
     });
 
     if (clicked) {
-      const req = await page.waitForRequest('https://*.twimg.com/**');
-      await req.response();
+      await page.waitForResponse('https://*.twimg.com/**');
     }
   }
 
@@ -226,8 +225,7 @@ const renderTweetEmbedded = async (context, url) => {
     });
 
     if (clicked) {
-      const req = await page.waitForRequest('https://*.twimg.com/**');
-      await req.response();
+      await page.waitForResponse('https://*.twimg.com/**');
     }
   }
 
