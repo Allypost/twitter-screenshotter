@@ -339,15 +339,30 @@ app.post("/", (req, res) => {
 });
 
 app.get("/*", speedLimiter, asyncReq(async (req, res) => {
-  const twitterUrl = req.params[0];
+  /**
+   * @type {URL | null}
+   */
+  let parsedUrl = null;
 
-  if (!twitterUrl) {
+  try {
+    const twitterUrl = req.params[0];
+    parsedUrl = new URL(twitterUrl);
+  } catch {
+  }
+
+  if (!parsedUrl) {
+    return res.sendStatus(StatusCodes.BAD_REQUEST);
+  }
+
+  if (parsedUrl.protocol !== 'https:') {
+    parsedUrl.protocol = 'https:';
+  }
+
+  if (parsedUrl.hostname !== 'twitter.com') {
     return res.sendStatus(StatusCodes.FORBIDDEN);
   }
 
-  const parsedUrl = new URL(twitterUrl);
-
-  if (parsedUrl.hostname !== 'twitter.com') {
+  if (!/\w{4,15}\/status\/\d+/.test(parsedUrl.pathname)) {
     return res.sendStatus(StatusCodes.FORBIDDEN);
   }
 
