@@ -65,16 +65,17 @@ let BROWSER;
 const asyncReq =
   (handler) => async (req, res) => {
     try {
-      return await handler(req, res);
+      await handler(req, res);
     } catch (e) {
       logger.debug(e);
-      return res.sendStatus(StatusCodes.INTERNAL_SERVER_ERROR);
-    } finally {
-      try {
-        await req.$browserContext.close();
-      } catch (e) {
-        logger.debug(e);
-      }
+
+      res.sendStatus(StatusCodes.INTERNAL_SERVER_ERROR);
+    }
+
+    try {
+      await req.$browserContext.close();
+    } catch (e) {
+      logger.debug(e);
     }
   }
   ;
