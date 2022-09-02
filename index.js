@@ -4,6 +4,8 @@ const {
   BrowserContext,
 } = require('playwright');
 const fs = require('fs');
+const http = require('node:http');
+const https = require('node:https');
 const express = require('express');
 const bodyParser = require('body-parser');
 const { StatusCodes } = require('http-status-codes');
@@ -362,8 +364,38 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
     return res.sendStatus(StatusCodes.FORBIDDEN);
   }
 
-  if (!/\w{4,15}\/status\/\d+/.test(parsedUrl.pathname)) {
+  const tweetUrlMatch = parsedUrl.pathname.match(/^\/\w{4,15}\/status\/(?<id>\d+)$/);
+  if (!tweetUrlMatch) {
     return res.sendStatus(StatusCodes.FORBIDDEN);
+  }
+
+  const tweetId = tweetUrlMatch.groups.id;
+  {
+    /**
+     * @type {object | null}
+     */
+    const tweetInfo = await new Promise((resolve) =>
+      https.get(`https://cdn.syndication.twimg.com/tweet?id=${tweetId}`, (res) => {
+        if (res.statusCode !== StatusCodes.OK) {
+          return resolve(null);
+        }
+
+        res.setEncoding('utf8');
+        let rawData = '';
+        res.on('data', (chunk) => { rawData += chunk; });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(rawData));
+          } catch {
+            resolve(null);
+          }
+        });
+      }),
+    );
+
+    if (!tweetInfo) {
+      return res.sendStatus(StatusCodes.NOT_FOUND);
+    }
   }
 
   const context = await BROWSER.newContext({
