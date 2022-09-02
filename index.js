@@ -1,5 +1,5 @@
 const {
-  chromium: BrowserInstance,
+  firefox: BrowserInstance,
   Browser,
   BrowserContext,
 } = require('playwright');
