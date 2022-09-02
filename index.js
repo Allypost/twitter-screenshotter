@@ -1,6 +1,7 @@
 const {
   chromium: BrowserInstance,
   Browser,
+  BrowserContext,
 } = require('playwright');
 const fs = require('fs');
 const express = require('express');
@@ -76,56 +77,112 @@ const speedLimiter = slowDown(slowDownOptions);
 
 const indexFile = fs.readFileSync("./index.html");
 
-app.get("/", (req, res) => {
-  res
-    .end(indexFile);
-});
+class TweetNotFoundError extends Error { }
 
-const faviconFile = fs.readFileSync("./favicon.ico");
-app.get('/favicon.ico', (req, res) => {
-  res
-    .end(faviconFile);
-})
+class TweetRenderError extends Error { }
 
-app.post("/", (req, res) => {
-  if (!req.body || !req.body.url) {
-    return res.sendStatus(StatusCodes.UNSUPPORTED_MEDIA_TYPE);
+/**
+ * 
+ * @param {BrowserContext} context
+ * @param {URL} url
+ * 
+ * @returns {Promise<Buffer>} Screenshot buffer
+ */
+const renderTweetPage = async (context, url) => {
+  const page = await context.newPage();
+
+  const resp = await page.goto(url.toString());
+
+  if (resp.status() !== 200) {
+    throw new TweetNotFoundError();
   }
 
-  res.redirect(`/${req.body.url}`).end();
-});
+  const TWEET_SELECTOR = 'data-testid=tweet';
+  await page.waitForSelector(TWEET_SELECTOR);
+  const tweet$ = await page.$(TWEET_SELECTOR);
 
-app.get("/*", speedLimiter, asyncReq(async (req, res) => {
-  const twitterUrl = req.params[0];
+  // Remove bottom popups (eg. Accept cookies, sign in, etc.)
+  {
+    const layers$ = await page.$('#layers');
 
-  if (!twitterUrl) {
-    return res.sendStatus(StatusCodes.FORBIDDEN);
+    await layers$.evaluate((el) => {
+      el.parentNode.removeChild(el);
+    });
   }
 
-  const parsedUrl = new URL(twitterUrl);
+  // Remove tweet actions (eg. Like, Retweet, Reply, etc.)
+  {
+    const hasActions = await tweet$.evaluate(($tweet) => {
+      const $likeBtn = $tweet.querySelector('[aria-label="Like"]');
 
-  if (parsedUrl.hostname !== 'twitter.com') {
-    return res.sendStatus(StatusCodes.FORBIDDEN);
+      let $tweetActions = $likeBtn;
+      while ($tweetActions && $tweetActions.getAttribute('role') !== 'group') {
+        $tweetActions = $tweetActions.parentNode;
+      }
+
+      if (!$tweetActions) {
+        return false;
+      }
+
+      $tweetActions.parentNode.removeChild($tweetActions);
+
+      return true;
+    });
+
+    if (!hasActions) {
+      throw new TweetRenderError();
+    }
   }
 
-  const context = await BROWSER.newContext({
-    acceptDownloads: false,
-    locale: 'en-US',
-    viewport: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
-    },
-    screen: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
-    },
+  // Check for sensitive content popup
+  {
+    const clicked = await tweet$.evaluate(($tweet) => {
+      const $settingsLink = $tweet.querySelector('a[href="/settings/content_you_see"]');
+
+      if (!$settingsLink) {
+        return false;
+      }
+
+      const $sensitiveContentPopup = $settingsLink.parentNode.parentNode.parentNode;
+      const $viewBtn = $sensitiveContentPopup.querySelector('[role="button"]');
+
+      $viewBtn.click();
+
+      return true;
+    });
+
+    if (clicked) {
+      const req = await page.waitForRequest('https://*.twimg.com/**');
+      await req.response();
+    }
+  }
+
+  // Add border radius to tweet to make it a bit more fancy
+  {
+    tweet$.evaluate(($tweet) => {
+      $tweet.style.borderRadius = '12px';
+    })
+  }
+
+  return tweet$.screenshot({
+    omitBackground: true,
+    quality: 95,
+    type: BROWSER_INFO.screenshotType,
   });
-  req.$browserContext = context;
+};
 
+/**
+ * 
+ * @param {BrowserContext} context
+ * @param {URL} url
+ * 
+ * @returns {Promise<Buffer>} Screenshot buffer
+ */
+const renderTweetEmbedded = async (context, url) => {
   const page = await context.newPage();
   await page.setContent(EMBED_HTML.replace(
     '{{URL_FOR_TWITTER}}',
-    twitterUrl,
+    url.toString(),
   ));
 
   const tweetIframe = await page.waitForSelector('.twitter-tweet-rendered iframe');
@@ -198,7 +255,7 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
 
       $tweet.removeChild($tweet.childNodes[0]);
     }, {
-      pathname: parsedUrl.pathname,
+      pathname: url.pathname,
     });
   }
 
@@ -230,17 +287,101 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
         $followBtnContainer.parentNode.removeChild($followBtnContainer);
       }
     }, {
-      pathname: parsedUrl.pathname,
+      pathname: url.pathname,
     });
   }
 
   const tweet = await frame.$('#app');
 
-  const buffer = await tweet.screenshot({
+  return tweet.screenshot({
     omitBackground: true,
     quality: 95,
     type: BROWSER_INFO.screenshotType,
   });
+};
+
+/**
+ * 
+ * @param {BrowserContext} context
+ * @param {URL} url
+ * 
+ * @returns {Promise<Buffer>} Screenshot buffer
+ */
+const renderTweet = async (context, url) => {
+  try {
+    return await renderTweetPage(context, url);
+  } catch (err) {
+    if (err instanceof TweetRenderError) {
+      return renderTweetEmbedded(context, url);
+    }
+
+    throw err;
+  }
+};
+
+app.get("/", (req, res) => {
+  res
+    .end(indexFile);
+});
+
+const faviconFile = fs.readFileSync("./favicon.ico");
+app.get('/favicon.ico', (req, res) => {
+  res
+    .end(faviconFile);
+})
+
+app.post("/", (req, res) => {
+  if (!req.body || !req.body.url) {
+    return res.sendStatus(StatusCodes.UNSUPPORTED_MEDIA_TYPE);
+  }
+
+  res.redirect(`/${req.body.url}`).end();
+});
+
+app.get("/*", speedLimiter, asyncReq(async (req, res) => {
+  const twitterUrl = req.params[0];
+
+  if (!twitterUrl) {
+    return res.sendStatus(StatusCodes.FORBIDDEN);
+  }
+
+  const parsedUrl = new URL(twitterUrl);
+
+  if (parsedUrl.hostname !== 'twitter.com') {
+    return res.sendStatus(StatusCodes.FORBIDDEN);
+  }
+
+  const context = await BROWSER.newContext({
+    acceptDownloads: false,
+    locale: 'en-US',
+    viewport: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+    screen: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+  });
+  req.$browserContext = context;
+
+  /**
+   * @type {Buffer}
+   */
+  let buffer;
+  try {
+    buffer = await renderTweet(context, parsedUrl);
+  } catch (e) {
+    if (e instanceof TweetRenderError) {
+      return res.sendStatus(StatusCodes.FORBIDDEN);
+    }
+
+    if (e instanceof TweetNotFoundError) {
+      return res.sendStatus(StatusCodes.NOT_FOUND);
+    }
+
+    throw e;
+  }
 
   res.setHeader('Content-Type', `image/${BROWSER_INFO.screenshotType}`);
   res.setHeader('Content-Length', buffer.length);
