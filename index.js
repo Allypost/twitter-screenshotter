@@ -74,7 +74,7 @@ app.get("/", (req, res) => {
 
 app.post("/", (req, res) => {
   if (!req.body || !req.body.url) {
-    return res.sendStatus(StatusCodes.NOT_ACCEPTABLE);
+    return res.sendStatus(StatusCodes.UNSUPPORTED_MEDIA_TYPE);
   }
 
   res.redirect(`/${req.body.url}`).end();
@@ -84,13 +84,13 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
   const twitterUrl = req.params[0];
 
   if (!twitterUrl) {
-    return res.sendStatus(StatusCodes.NOT_ACCEPTABLE);
+    return res.sendStatus(StatusCodes.FORBIDDEN);
   }
 
   const parsedUrl = new URL(twitterUrl);
 
   if (parsedUrl.hostname !== 'twitter.com') {
-    return res.sendStatus(StatusCodes.NOT_ACCEPTABLE);
+    return res.sendStatus(StatusCodes.FORBIDDEN);
   }
 
   req.$page = {};
