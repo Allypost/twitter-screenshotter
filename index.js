@@ -1,4 +1,7 @@
-const { chromium, Browser } = require('playwright');
+const {
+  chromium: BrowserInstance,
+  Browser,
+} = require('playwright');
 const fs = require('fs');
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -14,6 +17,16 @@ const REQUESTS_PER_SECOND = 1;
 const REQUESTS_MEASURE_WINDOW_SECONDS = 1 * 60; // 1 minute
 
 const SEND_CACHE_HEADER_FOR_SECONDS = 15 * 60 // 15 minutes
+
+const BROWSER_INFO = {
+  width: 2160,
+  height: 3840,
+  screenshotType:
+    BrowserInstance.name === 'chromium'
+      ? 'png'
+      : 'jpeg'
+  ,
+};
 
 const EMBED_HTML = fs.readFileSync('./embed.html', 'utf-8');
 
@@ -103,9 +116,14 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
 
   req.$page.context = await BROWSER.newContext({
     acceptDownloads: false,
+    locale: 'en-US',
+    viewport: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
     screen: {
-      width: 1920,
-      height: 1080,
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
     },
   });
   req.$page.page = await req.$page.context.newPage();
@@ -141,10 +159,11 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
 
   const buffer = await tweet.screenshot({
     omitBackground: true,
-    type: "png",
+    quality: 95,
+    type: BROWSER_INFO.screenshotType,
   });
 
-  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Content-Type', `image/${BROWSER_INFO.screenshotType}`);
   res.setHeader('Content-Length', buffer.length);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`);
@@ -154,7 +173,7 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
 
 Promise.resolve()
   .then(async () => {
-    BROWSER = await chromium.launch();
+    BROWSER = await BrowserInstance.launch();
   })
   .then(() => {
     app.listen(
