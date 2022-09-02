@@ -30,4 +30,7 @@ RUN yarn install --frozen-lockfile
 
 COPY . .
 
+# Install dependencies for playwright
+RUN npx playwright install-deps
+
 CMD ["pm2", "start", "--name", "Twitter Screenshotter", "--no-daemon", "-i", "max", "index.js"]
