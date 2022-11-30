@@ -1,5 +1,5 @@
 const {
-  chromium: BrowserInstance,
+  firefox: BrowserInstance,
   Browser,
   BrowserContext,
 } = require('playwright');
@@ -396,7 +396,7 @@ app.get("/*", speedLimiter, asyncReq(async (req, res) => {
      * @type {object | null}
      */
     const tweetInfo = await new Promise((resolve) =>
-      https.get(`https://cdn.syndication.twimg.com/tweet?id=${tweetId}`, (res) => {
+      https.get(`https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`, (res) => {
         if (res.statusCode !== StatusCodes.OK) {
           return resolve(null);
         }
