@@ -22,8 +22,8 @@ const SEND_CACHE_HEADER_FOR_SECONDS = 15 * 60; // 15 minutes
 const IS_DEV = process.env.NODE_ENV !== "production";
 
 const BROWSER_INFO = {
-  width: 2160,
-  height: 3840,
+  width: 1280,
+  height: 720,
 };
 
 const SCREENSHOT_CONFIG = (() => {
