@@ -21,8 +21,26 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 const BROWSER_INFO = {
   width: 2160,
   height: 3840,
-  screenshotType: BrowserInstance.name === "chromium" ? "png" : "jpeg",
 };
+
+const SCREENSHOT_CONFIG = (() => {
+  switch (BrowserInstance.name()) {
+    case "chromium": {
+      return {
+        omitBackground: true,
+        type: "png",
+      };
+    }
+
+    default: {
+      return {
+        omitBackground: true,
+        quality: 95,
+        type: "jpeg",
+      };
+    }
+  }
+})();
 
 const EMBED_HTML = fs.readFileSync("./embed.html", "utf-8");
 
@@ -190,11 +208,7 @@ const renderTweetPage = async (context, url) => {
     });
   }
 
-  return tweet$.screenshot({
-    omitBackground: true,
-    quality: 95,
-    type: BROWSER_INFO.screenshotType,
-  });
+  return tweet$.screenshot(SCREENSHOT_CONFIG);
 };
 
 /**
@@ -343,11 +357,7 @@ const renderTweetEmbedded = async (context, url) => {
 
   const tweet = await frame.$("#app");
 
-  return tweet.screenshot({
-    omitBackground: true,
-    quality: 95,
-    type: BROWSER_INFO.screenshotType,
-  });
+  return tweet.screenshot(SCREENSHOT_CONFIG);
 };
 
 /**
@@ -467,7 +477,7 @@ app.get(
 
     const buffer = await renderTweet(context, parsedUrl);
 
-    res.setHeader("Content-Type", `image/${BROWSER_INFO.screenshotType}`);
+    res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
     res.setHeader("Content-Length", buffer.length);
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader(
