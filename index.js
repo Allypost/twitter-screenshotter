@@ -1,4 +1,7 @@
-const { chromium: BrowserInstance } = require("playwright");
+const {
+  chromium: BrowserInstance,
+  devices: { "Desktop Chrome": BrowserInfo },
+} = require("playwright");
 const fs = require("fs");
 const https = require("node:https");
 const express = require("express");
@@ -84,7 +87,7 @@ const asyncReq = (handler) => async (req, res) => {
   }
 
   try {
-    await req.$browserContext.close();
+    await req.$browserContext?.close();
   } catch (e) {
     logger.debug(e);
   }
@@ -430,9 +433,17 @@ app.get(
       /**
        * @type {object | null}
        */
-      const tweetInfo = await new Promise((resolve) =>
+      const tweetInfo = await new Promise((resolve) => {
+        const url = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`;
+
         https.get(
-          `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`,
+          url,
+          {
+            headers: {
+              "User-Agent": BrowserInfo.userAgent,
+              Accept: "application/json",
+            },
+          },
           (res) => {
             if (res.statusCode !== StatusCodes.OK) {
               return resolve(null);
@@ -451,8 +462,8 @@ app.get(
               }
             });
           },
-        ),
-      );
+        );
+      });
 
       logger.debug("Tweet info", tweetInfo);
 
