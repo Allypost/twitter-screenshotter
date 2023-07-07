@@ -10,6 +10,7 @@ const { StatusCodes } = require("http-status-codes");
 const morgan = require("morgan");
 const slowDown = require("express-slow-down");
 const RedisStore = require("rate-limit-redis");
+const axios = require("axios");
 
 const HOST = process.env.HOST || "localhost";
 const PORT = process.env.PORT || 8080;
@@ -73,7 +74,7 @@ class Logger {
 const logger = new Logger();
 
 /**
- * @type {Browser}
+ * @type {(import "playwright").Browser}
  */
 let BROWSER;
 
@@ -121,7 +122,7 @@ const indexFile = fs.readFileSync("./index.html");
 
 /**
  *
- * @param {BrowserContext} context
+ * @param {(import "playwright").BrowserContext} context
  * @param {URL} url
  *
  * @returns {Promise<Buffer | null>} Screenshot buffer
@@ -216,7 +217,7 @@ const renderTweetPage = async (context, url) => {
 
 /**
  *
- * @param {BrowserContext} context
+ * @param {(import "playwright").BrowserContext} context
  * @param {URL} url
  *
  * @returns {Promise<Buffer>} Screenshot buffer
@@ -391,6 +392,165 @@ app.post("/", (req, res) => {
   res.redirect(`/${req.body.url}`);
 });
 
+/**
+ *
+ * @param {*} req
+ * @param {*} res
+ * @param {URL} url
+ * @returns
+ */
+const handleNonTwitter = async (req, res, url) => {
+  logger.debug("Non-twitter URL", url.toString());
+
+  const urlPath = url.pathname.replace(/\/$/, "");
+  const tootId = urlPath.split("/").pop() ?? "";
+
+  if (!/^\d+$/.test(tootId)) {
+    logger.debug("Invalid toot ID", tootId);
+    return res.sendStatus(StatusCodes.UNPROCESSABLE_ENTITY);
+  }
+
+  const tootInfo = await axios
+    .get(`https://${url.hostname}/api/v1/statuses/${tootId}`, {
+      timeout: 5000,
+      headers: {
+        Accept: "application/json",
+      },
+    })
+    .then((res) => res.data)
+    .catch(() => null);
+
+  if (!tootInfo) {
+    logger.debug("Toot not found", tootId);
+    return res.sendStatus(StatusCodes.NOT_FOUND);
+  }
+
+  const BROWSER_INFO = {
+    width: 720,
+    height: 2160,
+  };
+  const context = await BROWSER.newContext({
+    acceptDownloads: false,
+    locale: "en-US",
+    viewport: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+    screen: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+  });
+  req.$browserContext = context;
+
+  const buffer = await (async (context, url) => {
+    logger.debug("Start rendering Mastodon page", url.toString());
+    const page = await context.newPage();
+
+    await page.goto(url.toString());
+
+    // await page.waitForSelector("#mastodon .detailed-status__wrapper");
+    await page.waitForLoadState("networkidle");
+
+    const toot$ = await page.$("#mastodon .detailed-status__wrapper");
+
+    if (!toot$) {
+      logger.debug("Toot not available");
+      return null;
+    }
+
+    const container$ = await toot$.evaluateHandle(($el) => {
+      let $container = $el;
+      while (
+        ($container && !$container.classList.contains("scrollable")) ||
+        $container === document
+      ) {
+        $container = $container.parentNode;
+      }
+
+      return $container;
+    });
+    console.log({ container$, container: await container$?.innerHTML() });
+
+    // Remove replies to toot and add style to container
+    {
+      await container$.evaluate(($el) => {
+        console.log({ $container: $el });
+        $el.querySelectorAll(".status__wrapper-reply").forEach(($reply) => {
+          console.log({ $reply });
+          while ($reply && $reply.parentNode !== $el) {
+            $reply = $reply.parentNode;
+          }
+          $reply?.remove();
+        });
+
+        $el.style.flex = "0";
+      });
+    }
+    // Remove toot actions (eg. Like, Retweet, Reply, etc.)
+    {
+      await container$.evaluate(($el) => {
+        $el
+          .querySelectorAll(".status__action-bar, .detailed-status__action-bar")
+          .forEach(($actions) => {
+            $actions?.remove();
+          });
+      });
+    }
+    // Expand all spoilers
+    {
+      await container$.evaluate(($el) => {
+        $el
+          .querySelectorAll(
+            'button.status__content__spoiler-link[aria-expanded="false"]',
+          )
+          .forEach(($action) => {
+            $action?.click();
+          });
+      });
+    }
+    // Click on all spoiler buttons
+    {
+      await container$.evaluate(($el) => {
+        $el
+          .querySelectorAll(
+            '.spoiler-button > button[class="spoiler-button__overlay"]',
+          )
+          .forEach(($spoilerBtn) => {
+            $spoilerBtn?.click();
+          });
+      });
+      await page.waitForLoadState("networkidle");
+    }
+    // Remove image spoiler button if shown
+    {
+      await container$.evaluate(($el) => {
+        $el
+          .querySelectorAll(".spoiler-button--minified")
+          .forEach(($actions) => {
+            $actions?.remove();
+          });
+      });
+    }
+
+    return container$.screenshot(SCREENSHOT_CONFIG);
+  })(context, url).catch(() => null);
+
+  if (!buffer) {
+    return res.sendStatus(StatusCodes.NOT_FOUND);
+  }
+
+  res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
+  res.setHeader("Content-Length", buffer.length);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Cache-Control",
+    `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
+  );
+
+  return res.end(buffer);
+};
+
 app.get(
   "/*",
   speedLimiter,
@@ -399,14 +559,15 @@ app.get(
      * @type {URL | null}
      */
     let parsedUrl = null;
-    try {
+    {
       const twitterUrl = req.params[0];
+      try {
+        logger.debug("Starting processing", twitterUrl);
 
-      logger.debug("Starting processing", twitterUrl);
-
-      parsedUrl = new URL(twitterUrl);
-    } catch (e) {
-      logger.debug("URL parse failed", twitterUrl, e);
+        parsedUrl = new URL(twitterUrl);
+      } catch (e) {
+        logger.debug("URL parse failed", twitterUrl, e);
+      }
     }
 
     if (!parsedUrl) {
@@ -418,7 +579,7 @@ app.get(
     }
 
     if (parsedUrl.hostname !== "twitter.com") {
-      return res.sendStatus(StatusCodes.FORBIDDEN);
+      return handleNonTwitter(req, res, parsedUrl);
     }
 
     const tweetUrlMatch = parsedUrl.pathname.match(
