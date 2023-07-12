@@ -27,6 +27,17 @@ steps:
           - name: docker
             path: /var/run/docker.sock
 
+    - name: notify-watchtower
+      image: alpine
+      environment:
+          _WATCHTOWER_DOMAIN:
+              from_secret: watchtower_domain
+          _WATCHTOWER_KEY:
+              from_secret: watchtower_key
+      commands:
+          - apk add curl
+          - 'curl -sL -H "Authorization: Bearer $_WATCHTOWER_KEY" "$_WATCHTOWER_DOMAIN/v1/update"'
+
     - name: notify-telegram
       image: appleboy/drone-telegram
       settings:
