@@ -403,8 +403,8 @@ app.post("/", (req, res) => {
  * @param {URL} url
  * @returns
  */
-const handleNonTwitter = async (req, res, url) => {
-  logger.debug("Non-twitter URL", url.toString());
+const handleMastodonToot = async (req, res, url) => {
+  logger.debug("Toot URL", url.toString());
 
   const urlPath = url.pathname.replace(/\/$/, "");
   const tootId = urlPath.split("/").pop() ?? "";
@@ -583,7 +583,7 @@ app.get(
     }
 
     if (parsedUrl.hostname !== "twitter.com") {
-      return handleNonTwitter(req, res, parsedUrl);
+      return handleMastodonToot(req, res, parsedUrl);
     }
 
     const tweetUrlMatch = parsedUrl.pathname.match(
