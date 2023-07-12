@@ -24,7 +24,7 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 
 const BROWSER_INFO = {
   width: 1280,
-  height: 720,
+  height: 1920,
 };
 
 const SCREENSHOT_CONFIG = (() => {
@@ -211,6 +211,10 @@ const renderTweetPage = async (context, url) => {
       $tweet.style.borderRadius = "12px";
     });
   }
+
+  await page
+    .$('div[aria-label="Home timeline"] > :nth-child(1)')
+    .then((el$) => el$.evaluate(($el) => $el.remove()));
 
   return tweet$.screenshot(SCREENSHOT_CONFIG);
 };
