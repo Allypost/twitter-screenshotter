@@ -28,6 +28,7 @@ steps:
             path: /var/run/docker.sock
 
     - name: notify-watchtower
+      failure: ignore
       image: alpine
       environment:
           _WATCHTOWER_DOMAIN:
@@ -39,6 +40,7 @@ steps:
           - 'curl -sL -H "Authorization: Bearer $_WATCHTOWER_KEY" "$_WATCHTOWER_DOMAIN/v1/update"'
 
     - name: notify-telegram
+      failure: ignore
       image: appleboy/drone-telegram
       settings:
           token:
