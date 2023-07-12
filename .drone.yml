@@ -42,6 +42,7 @@ steps:
     - name: notify-telegram
       failure: ignore
       image: appleboy/drone-telegram
+      pull: always
       settings:
           token:
               from_secret: telegram_token
@@ -59,16 +60,16 @@ steps:
               Built on `{{tpl.machine}}` in {{since build.started}}
 
 
-              Commit by `{{commit.author}}` on `{{commit.branch}}`:
+              📝 Commit by `{{commit.author}}` on `{{commit.branch}}`:
 
               ```
               {{commit.message}}
               ```
 
 
-              [Link to build]({{ build.link }})
+              [🌐 Link to build]({{ build.link }})
               \
-              [Link to commit]({{ commit.link }})
+              [🕸️Link to commit]({{ commit.link }})
 
       when:
           status:
