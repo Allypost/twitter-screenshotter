@@ -639,6 +639,80 @@ const handleTwitterTweet = async (req, res, url) => {
   return res.end(buffer);
 };
 
+/**
+ * @param {*} req
+ * @param {*} res
+ * @param {URL} url
+ * @returns
+ */
+const handleTumblrPost = async (req, res, url) => {
+  logger.debug("Tumblr URL", url.toString());
+
+  const BROWSER_INFO = {
+    width: 720,
+    height: 2160,
+  };
+  const context = await BROWSER.newContext({
+    acceptDownloads: false,
+    locale: "en-US",
+    viewport: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+    screen: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+  });
+  req.$browserContext = context;
+
+  const buffer = await (async (context, url) => {
+    logger.debug("Start rendering Tumblr page", url.toString());
+    const page = await context.newPage();
+
+    await page.goto(url.toString());
+
+    await page.waitForLoadState("networkidle");
+
+    const post$ = await page.$('header[role="banner"] + div');
+
+    if (!post$) {
+      logger.debug("Post not found");
+      return null;
+    }
+
+    // Prevent margin collapse on post (should restore bottom "padding")
+    {
+      await post$.evaluate(($post) => {
+        $post.style.paddingBottom = "1px";
+      });
+    }
+
+    // Remove screen overlay
+    {
+      await page.evaluate(() => {
+        document.querySelector(".components-modal__screen-overlay")?.remove();
+      });
+    }
+
+    return post$.screenshot(SCREENSHOT_CONFIG);
+  })(context, url).catch(() => null);
+
+  if (!buffer) {
+    return res.sendStatus(StatusCodes.NOT_FOUND);
+  }
+
+  res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
+  res.setHeader("Content-Length", buffer.length);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Cache-Control",
+    `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
+  );
+
+  return res.end(buffer);
+};
+
 app.get(
   "/*",
   speedLimiter,
@@ -670,6 +744,14 @@ app.get(
         parsedUrl.protocol = "https:";
 
         return handleTwitterTweet(req, res, parsedUrl);
+      }
+
+      case "tumblr.com":
+      case "www.tumblr.com": {
+        parsedUrl.hostname = "www.tumblr.com";
+        parsedUrl.protocol = "https:";
+
+        return handleTumblrPost(req, res, parsedUrl);
       }
 
       default: {
