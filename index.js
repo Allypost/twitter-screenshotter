@@ -555,6 +555,90 @@ const handleMastodonToot = async (req, res, url) => {
   return res.end(buffer);
 };
 
+/**
+ *
+ * @param {*} req
+ * @param {*} res
+ * @param {URL} url
+ * @returns
+ */
+const handleTwitterTweet = async (req, res, url) => {
+  const tweetUrlMatch = url.pathname.match(/^\/\w{4,15}\/status\/(?<id>\d+)$/);
+  if (!tweetUrlMatch) {
+    return res.sendStatus(StatusCodes.FORBIDDEN);
+  }
+
+  const tweetId = tweetUrlMatch.groups.id;
+  {
+    /**
+     * @type {object | null}
+     */
+    const tweetInfo = await new Promise((resolve) => {
+      const url = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`;
+
+      https.get(
+        url,
+        {
+          headers: {
+            "User-Agent": BrowserInfo.userAgent,
+            Accept: "application/json",
+          },
+        },
+        (res) => {
+          if (res.statusCode !== StatusCodes.OK) {
+            return resolve(null);
+          }
+
+          res.setEncoding("utf8");
+          let rawData = "";
+          res.on("data", (chunk) => {
+            rawData += chunk;
+          });
+          res.on("end", () => {
+            try {
+              resolve(JSON.parse(rawData));
+            } catch {
+              resolve(null);
+            }
+          });
+        },
+      );
+    });
+
+    logger.debug("Tweet info", tweetInfo);
+
+    if (!tweetInfo) {
+      return res.sendStatus(StatusCodes.NOT_FOUND);
+    }
+  }
+
+  const context = await BROWSER.newContext({
+    acceptDownloads: false,
+    locale: "en-US",
+    viewport: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+    screen: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+  });
+  req.$browserContext = context;
+
+  const buffer = await renderTweet(context, url);
+
+  res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
+  res.setHeader("Content-Length", buffer.length);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Cache-Control",
+    `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
+  );
+
+  return res.end(buffer);
+};
+
 app.get(
   "/*",
   speedLimiter,
@@ -578,90 +662,20 @@ app.get(
       return res.sendStatus(StatusCodes.BAD_REQUEST);
     }
 
-    if (parsedUrl.protocol !== "https:") {
-      parsedUrl.protocol = "https:";
-    }
+    switch (parsedUrl.hostname) {
+      case "twitter.com":
+      case "x.com":
+      case "www.twitter.com": {
+        parsedUrl.hostname = "twitter.com";
+        parsedUrl.protocol = "https:";
 
-    if (parsedUrl.hostname !== "twitter.com") {
-      return handleMastodonToot(req, res, parsedUrl);
-    }
+        return handleTwitterTweet(req, res, parsedUrl);
+      }
 
-    const tweetUrlMatch = parsedUrl.pathname.match(
-      /^\/\w{4,15}\/status\/(?<id>\d+)$/,
-    );
-    if (!tweetUrlMatch) {
-      return res.sendStatus(StatusCodes.FORBIDDEN);
-    }
-
-    const tweetId = tweetUrlMatch.groups.id;
-    {
-      /**
-       * @type {object | null}
-       */
-      const tweetInfo = await new Promise((resolve) => {
-        const url = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`;
-
-        https.get(
-          url,
-          {
-            headers: {
-              "User-Agent": BrowserInfo.userAgent,
-              Accept: "application/json",
-            },
-          },
-          (res) => {
-            if (res.statusCode !== StatusCodes.OK) {
-              return resolve(null);
-            }
-
-            res.setEncoding("utf8");
-            let rawData = "";
-            res.on("data", (chunk) => {
-              rawData += chunk;
-            });
-            res.on("end", () => {
-              try {
-                resolve(JSON.parse(rawData));
-              } catch {
-                resolve(null);
-              }
-            });
-          },
-        );
-      });
-
-      logger.debug("Tweet info", tweetInfo);
-
-      if (!tweetInfo) {
-        return res.sendStatus(StatusCodes.NOT_FOUND);
+      default: {
+        return handleMastodonToot(req, res, parsedUrl);
       }
     }
-
-    const context = await BROWSER.newContext({
-      acceptDownloads: false,
-      locale: "en-US",
-      viewport: {
-        width: BROWSER_INFO.width,
-        height: BROWSER_INFO.height,
-      },
-      screen: {
-        width: BROWSER_INFO.width,
-        height: BROWSER_INFO.height,
-      },
-    });
-    req.$browserContext = context;
-
-    const buffer = await renderTweet(context, parsedUrl);
-
-    res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
-    res.setHeader("Content-Length", buffer.length);
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader(
-      "Cache-Control",
-      `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
-    );
-
-    return res.end(buffer);
   }),
 );
 
