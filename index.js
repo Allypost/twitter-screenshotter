@@ -133,7 +133,7 @@ const renderTweetPage = async (context, url) => {
 
   await page.goto(url.toString());
 
-  await page.waitForSelector("data-testid=cellInnerDiv >> nth=0");
+  await page.waitForLoadState("networkidle");
 
   if (
     !(await page.$("data-testid=cellInnerDiv >> nth=0 >> data-testid=tweet"))
@@ -234,6 +234,7 @@ const renderTweetEmbedded = async (context, url) => {
     EMBED_HTML.replace("{{URL_FOR_TWITTER}}", url.toString()),
   );
 
+  await page.waitForLoadState("networkidle");
   const tweetIframe = await page.waitForSelector(
     ".twitter-tweet-rendered iframe",
   );
