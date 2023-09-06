@@ -566,6 +566,7 @@ const handleMastodonToot = async (req, res, url) => {
 const handleTwitterTweet = async (req, res, url) => {
   const tweetUrlMatch = url.pathname.match(/^\/\w{4,15}\/status\/(?<id>\d+)$/);
   if (!tweetUrlMatch) {
+    logger.debug("Invalid tweet URL", url.toString());
     return res.sendStatus(StatusCodes.FORBIDDEN);
   }
 
@@ -773,6 +774,7 @@ Promise.resolve()
   .then(() => {
     app.listen(PORT, HOST, () => {
       // Cache thing: 1
+      console.error("|> Environment:", JSON.stringify(process.env));
       console.error(`|> Listening on http://${HOST}:${PORT}`);
     });
   });
