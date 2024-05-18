@@ -652,7 +652,7 @@ const handleTumblrPost = async (req, res, url) => {
 
   const BROWSER_INFO = {
     width: 720,
-    height: 2160,
+    height: 720 * 6,
   };
   const context = await BROWSER.newContext({
     acceptDownloads: false,
@@ -676,29 +676,139 @@ const handleTumblrPost = async (req, res, url) => {
 
     await page.waitForLoadState("networkidle");
 
-    const post$ = await page.$('header[role="banner"] + div');
+    const post$ = await page
+      .$('article:has(header[role="banner"] + div + div)')
+      .catch((e) => {
+        logger.debug("Error getting banner", e);
+      });
 
     if (!post$) {
       logger.debug("Post not found");
       return null;
     }
 
+    // Remove three dots and "follow" from post header
+    {
+      const header$ = await post$.$('header[role="banner"]').catch(() => null);
+
+      if (header$) {
+        await header$
+          .evaluate(($header) => {
+            $header.querySelector('[aria-label="More options"]')?.remove();
+            $header.querySelector('[aria-label="Follow"]')?.remove();
+          })
+          .catch((e) => {
+            logger.debug('Remove three dots and "follow" from post header', e);
+          });
+      }
+    }
+
     // Prevent margin collapse on post (should restore bottom "padding")
     {
-      await post$.evaluate(($post) => {
-        $post.style.paddingBottom = "1px";
-      });
+      await post$
+        .evaluate(($post) => {
+          $post.style.paddingBottom = "1px";
+        })
+        .catch((e) => {
+          logger.debug("Prevent margin collapse on post error", e);
+        });
+    }
+
+    // Remove alt text thing
+    {
+      await post$
+        .evaluate(() => {
+          document
+            .querySelectorAll('[data-alt-text-popover="true"]')
+            .forEach((e) => e.remove());
+        })
+        .catch((e) => {
+          logger.debug("Remove alt text thing error", e);
+        });
+    }
+
+    // Expand tags
+    {
+      await post$
+        .evaluate(($post) => {
+          $post
+            .querySelector('[data-testid="tag-link"] + a[role="button"]')
+            ?.click();
+        })
+        .catch((e) => {
+          logger.debug("Expand tags error", e);
+        });
+    }
+
+    // Clean up notes/footer section
+    {
+      const footer$ = await post$
+        .$('footer[role="contentinfo"]')
+        .catch(() => null);
+
+      if (footer$) {
+        await footer$
+          .evaluate(($footer) => {
+            $footer.firstChild?.remove();
+
+            const $pa = $footer.querySelector('[aria-label="Post Activity"]');
+            if ($pa) {
+              $pa.style.height = "auto";
+
+              $pa
+                .querySelector(
+                  '[data-testid="desktop-selector"], [data-testid="mobile-selector"]',
+                )
+                ?.remove();
+
+              $pa.querySelector('[role="tab"][title="Reblog Graph"]')?.remove();
+
+              $pa.querySelector('[data-testid="notes-root"]')?.remove();
+
+              const $repliesTab = $pa.querySelector(
+                '[role="tab"][title="Replies"]',
+              );
+              const $tabItem = $pa.querySelector('[role="tab"] + [role="tab"]');
+              if ($tabItem && $repliesTab) {
+                $repliesTab.classList = $tabItem.classList;
+              }
+            }
+          })
+          .catch((e) => {
+            logger.debug("Clean up notes/footer section error", e);
+          });
+      }
     }
 
     // Remove screen overlay
     {
-      await page.evaluate(() => {
-        document.querySelector(".components-modal__screen-overlay")?.remove();
-      });
+      await page
+        .evaluate(() => {
+          document.querySelector(".components-modal__screen-overlay")?.remove();
+          document.querySelector("body > #cmp-app-container")?.remove();
+
+          let signupOverlay = document.querySelector(
+            '[aria-label="Sign me up"] + [aria-label="Log in"]',
+          );
+          while (signupOverlay) {
+            let parent = signupOverlay.parentElement?.parentElement;
+            if (parent?.dataset?.["testid"] === "scroll-container") {
+              signupOverlay.remove();
+              break;
+            }
+            signupOverlay = signupOverlay.parentElement;
+          }
+        })
+        .catch((e) => {
+          logger.debug("Remove screen overlay error", e);
+        });
     }
 
     return post$.screenshot(SCREENSHOT_CONFIG);
-  })(context, url).catch(() => null);
+  })(context, url).catch((e) => {
+    logger.debug("Failed to screenshot post", e);
+    return null;
+  });
 
   if (!buffer) {
     return res.sendStatus(StatusCodes.NOT_FOUND);
