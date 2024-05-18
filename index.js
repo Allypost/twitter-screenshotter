@@ -867,6 +867,22 @@ app.get(
       }
 
       default: {
+        const tumblrSubdomainPost = parsedUrl
+          .toString()
+          .match(
+            /^https?:\/\/(?<subdomain>[^\-][a-zA-Z0-9\-]{0,30}[^\-])\.tumblr\.com\/post\/(?<postId>[\d]+)(?:\/(?<postSlug>[^\/]+))?/i,
+          )?.groups;
+        if (tumblrSubdomainPost) {
+          parsedUrl.hostname = "www.tumblr.com";
+          parsedUrl.protocol = "https:";
+          parsedUrl.pathname = `/${tumblrSubdomainPost.subdomain}/${tumblrSubdomainPost.postId}`;
+          if (tumblrSubdomainPost.postSlug) {
+            parsedUrl.pathname += `/${tumblrSubdomainPost.postSlug}`;
+          }
+
+          return handleTumblrPost(req, res, parsedUrl);
+        }
+
         return handleMastodonToot(req, res, parsedUrl);
       }
     }
