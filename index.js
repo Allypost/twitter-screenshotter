@@ -381,7 +381,7 @@ const renderTweet = (context, url) =>
     (data) => data || renderTweetEmbedded(context, url),
   );
 app.get("/", (_req, res) => {
-  res.end(indexFile);
+  res.set("Content-Type", "text/html; charset=utf-8").end(indexFile);
 });
 
 const faviconFile = fs.readFileSync("./favicon.ico");
