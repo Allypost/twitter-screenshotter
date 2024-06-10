@@ -571,12 +571,15 @@ const handleTwitterTweet = async (req, res, url) => {
   }
 
   const tweetId = tweetUrlMatch.groups.id;
+  logger.debug("Tweet ID", tweetId);
   {
     /**
      * @type {object | null}
      */
     const tweetInfo = await new Promise((resolve) => {
       const url = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`;
+
+      logger.debug("Tweet info URL", url);
 
       https.get(
         url,
@@ -588,6 +591,7 @@ const handleTwitterTweet = async (req, res, url) => {
         },
         (res) => {
           if (res.statusCode !== StatusCodes.OK) {
+            logger.debug("Tweet info request failed", res.statusCode);
             return resolve(null);
           }
 
@@ -851,6 +855,7 @@ app.get(
     switch (parsedUrl.hostname) {
       case "twitter.com":
       case "x.com":
+      case "www.x.com":
       case "www.twitter.com": {
         parsedUrl.hostname = "twitter.com";
         parsedUrl.protocol = "https:";
