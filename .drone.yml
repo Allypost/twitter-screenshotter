@@ -4,7 +4,7 @@ type: docker
 name: build-image
 
 node:
-    m_name: beef-ci
+    m_name: main-web
 
 steps:
     - name: build-docker-image
