@@ -434,19 +434,25 @@ const handleMastodonToot = async (req, res, url) => {
     width: 720,
     height: 2160,
   };
-  const context = await BROWSER.newContext({
-    acceptDownloads: false,
-    locale: "en-US",
-    viewport: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
-    },
-    screen: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
-    },
-  });
-  req.$browserContext = context;
+  req.$browserContext =
+    req.$browserContext ??
+    (await BROWSER.newContext({
+      acceptDownloads: false,
+      locale: "en-US",
+      viewport: {
+        width: BROWSER_INFO.width,
+        height: BROWSER_INFO.height,
+      },
+      screen: {
+        width: BROWSER_INFO.width,
+        height: BROWSER_INFO.height,
+      },
+    }));
+
+  /**
+   * @type {(import "playwright").BrowserContext}
+   */
+  const context = req.$browserContext;
 
   const buffer = await (async (context, url) => {
     logger.debug("Start rendering Mastodon page", url.toString());
@@ -454,10 +460,11 @@ const handleMastodonToot = async (req, res, url) => {
 
     await page.goto(url.toString());
 
-    // await page.waitForSelector("#mastodon .detailed-status__wrapper");
     await page.waitForLoadState("networkidle");
 
-    const toot$ = await page.$("#mastodon .detailed-status__wrapper");
+    const toot$ = await page
+      .$("#mastodon .detailed-status__wrapper")
+      .catch(() => null);
 
     if (!toot$) {
       logger.debug("Toot not available");
