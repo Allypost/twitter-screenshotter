@@ -836,6 +836,10 @@ const handleTumblrPost = async (req, res, url) => {
   return res.end(buffer);
 };
 
+app.get("/healthz", (_req, res) => {
+  return res.sendStatus(StatusCodes.OK);
+});
+
 app.get(
   "/*",
   speedLimiter,
