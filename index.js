@@ -482,14 +482,11 @@ const handleMastodonToot = async (req, res, url) => {
 
       return $container;
     });
-    console.log({ container$, container: await container$?.innerHTML() });
 
     // Remove replies to toot and add style to container
     {
       await container$.evaluate(($el) => {
-        console.log({ $container: $el });
         $el.querySelectorAll(".status__wrapper-reply").forEach(($reply) => {
-          console.log({ $reply });
           while ($reply && $reply.parentNode !== $el) {
             $reply = $reply.parentNode;
           }
