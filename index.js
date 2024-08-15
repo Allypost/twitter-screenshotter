@@ -10,7 +10,7 @@ const { StatusCodes } = require("http-status-codes");
 const morgan = require("morgan");
 const slowDown = require("express-slow-down");
 const RedisStore = require("rate-limit-redis");
-const axios = require("axios");
+const axios = require("axios").default;
 
 const HOST = process.env.HOST || "localhost";
 const PORT = process.env.PORT || 8080;
@@ -78,21 +78,46 @@ const logger = new Logger();
  */
 let BROWSER;
 
-const asyncReq = (handler) => async (req, res) => {
-  try {
-    await handler(req, res);
-  } catch (e) {
-    logger.debug(e);
+/**
+ * @typedef {(import "playwright").BrowserContext} BrowserContext
+ */
 
-    res.sendStatus(StatusCodes.INTERNAL_SERVER_ERROR);
-  }
+/**
+ * Request object with browser context
+ * @typedef {(import "express").Request & { $browserContext: BrowserContext | null | undefined, $seenUrls: string[] | undefined }} AppRequest
+ */
 
-  try {
-    await req.$browserContext?.close();
-  } catch (e) {
-    logger.debug(e);
-  }
-};
+/**
+ * Request object with browser context
+ * @typedef {(import "express").Response} AppResponse
+ */
+
+/**
+ *
+ * @param {(req: AppRequest, res: AppResponse) => any} handler
+ * @returns
+ */
+const asyncReq =
+  (handler) =>
+  /**
+   * @param {AppRequest} req
+   * @param {AppResponse} res
+   */
+  async (req, res) => {
+    try {
+      await handler(req, res);
+    } catch (e) {
+      logger.debug(e);
+
+      res.sendStatus(StatusCodes.INTERNAL_SERVER_ERROR);
+    }
+
+    try {
+      await req.$browserContext?.close();
+    } catch (e) {
+      logger.debug(e);
+    }
+  };
 const app = express();
 
 app.disable("x-powered-by");
@@ -122,7 +147,7 @@ const indexFile = fs.readFileSync("./index.html");
 
 /**
  *
- * @param {(import "playwright").BrowserContext} context
+ * @param {BrowserContext} context
  * @param {URL} url
  *
  * @returns {Promise<Buffer | null>} Screenshot buffer
@@ -221,7 +246,7 @@ const renderTweetPage = async (context, url) => {
 
 /**
  *
- * @param {(import "playwright").BrowserContext} context
+ * @param {BrowserContext} context
  * @param {URL} url
  *
  * @returns {Promise<Buffer>} Screenshot buffer
@@ -399,8 +424,8 @@ app.post("/", (req, res) => {
 
 /**
  *
- * @param {*} req
- * @param {*} res
+ * @param {AppRequest} req
+ * @param {AppResponse} res
  * @param {URL} url
  * @returns
  */
@@ -566,8 +591,8 @@ const handleMastodonToot = async (req, res, url) => {
 
 /**
  *
- * @param {*} req
- * @param {*} res
+ * @param {AppRequest} req
+ * @param {AppResponse} res
  * @param {URL} url
  * @returns
  */
@@ -658,8 +683,8 @@ const handleTwitterTweet = async (req, res, url) => {
 };
 
 /**
- * @param {*} req
- * @param {*} res
+ * @param {AppRequest} req
+ * @param {AppResponse} res
  * @param {URL} url
  * @returns
  */
