@@ -4,7 +4,7 @@ type: docker
 name: build-image
 
 node:
-    m_name: main-web
+    m_name: tethys
 
 steps:
     - name: build-docker-image
