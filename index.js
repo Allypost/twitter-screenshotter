@@ -509,31 +509,36 @@ const handleMastodonToot = async (req, res, url) => {
       return null;
     }
 
-    const container$ = await toot$.evaluateHandle(($el) => {
-      let $container = $el;
-      while (
-        ($container && !$container.classList.contains("scrollable")) ||
-        $container === document
-      ) {
-        $container = $container.parentNode;
-      }
+    // Remove global toolbars
+    {
+      await page.evaluate(() => {
+        document.querySelector(".tabs-bar__wrapper")?.remove();
+        document.querySelector(".ui__header")?.remove();
+      });
+    }
 
-      return $container;
-    });
+    const container$ =
+      (await page.$("#mastodon .scrollable:has(.detailed-status__wrapper)")) ??
+      toot$;
 
     // Remove replies to toot and add style to container
     {
-      await container$.evaluate(($el) => {
-        $el.querySelectorAll(".status__wrapper-reply").forEach(($reply) => {
-          while ($reply && $reply.parentNode !== $el) {
-            $reply = $reply.parentNode;
-          }
-          $reply?.remove();
-        });
+      await container$.evaluate(($container) => {
+        const $mainEl = $container.querySelector(
+          "*:has(.detailed-status__wrapper)",
+        );
 
-        $el.style.flex = "0";
+        let nextElement = $mainEl?.nextSibling;
+        while (nextElement) {
+          let elementToRemove = nextElement;
+          nextElement = nextElement.nextSibling; // Move to the next sibling
+          elementToRemove.parentNode.removeChild(elementToRemove); // Remove the current sibling
+        }
+
+        $container.style.flex = "0";
       });
     }
+
     // Remove toot actions (eg. Like, Retweet, Reply, etc.)
     {
       await container$.evaluate(($el) => {
@@ -544,6 +549,7 @@ const handleMastodonToot = async (req, res, url) => {
           });
       });
     }
+
     // Expand all spoilers
     {
       await container$.evaluate(($el) => {
@@ -556,6 +562,7 @@ const handleMastodonToot = async (req, res, url) => {
           });
       });
     }
+
     // Click on all spoiler buttons
     {
       await container$.evaluate(($el) => {
@@ -569,6 +576,7 @@ const handleMastodonToot = async (req, res, url) => {
       });
       await page.waitForLoadState("networkidle");
     }
+
     // Remove image spoiler button if shown
     {
       await container$.evaluate(($el) => {
