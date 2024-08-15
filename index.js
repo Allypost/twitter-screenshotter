@@ -425,7 +425,7 @@ const handleMastodonToot = async (req, res, url) => {
     .then((res) => res.data)
     .catch(() => null);
 
-  if (!tootInfo) {
+  if (!tootInfo || !("url" in tootInfo) || typeof tootInfo.url !== "string") {
     logger.debug("Toot not found", tootId);
     return res.sendStatus(StatusCodes.NOT_FOUND);
   }
@@ -543,7 +543,7 @@ const handleMastodonToot = async (req, res, url) => {
     }
 
     return container$.screenshot(SCREENSHOT_CONFIG);
-  })(context, url).catch(() => null);
+  })(context, tootInfo.url).catch(() => null);
 
   if (!buffer) {
     return res.sendStatus(StatusCodes.NOT_FOUND);
