@@ -723,6 +723,19 @@ const handleTumblrPost = async (req, res, url) => {
       return null;
     }
 
+    // Remove the global tumblr header
+    {
+      await page
+        .evaluate(() => {
+          document
+            .querySelector("#base-container header")
+            ?.parentElement?.remove();
+        })
+        .catch((e) => {
+          logger.debug("Remove header error", e);
+        });
+    }
+
     // Remove three dots and "follow" from post header
     {
       const header$ = await post$.$('header[role="banner"]').catch(() => null);
