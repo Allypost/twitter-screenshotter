@@ -1020,77 +1020,77 @@ const handleMisskeyPost = async (req, res, url) => {
 };
 
 /**
+ * @param {URL} url
+ */
+const getNodeInfo = async (url) => {
+  const nodeInfoListValidator = z.object({
+    links: z.array(
+      z.object({
+        rel: z.string(),
+        href: z.string().url(),
+      }),
+    ),
+  });
+
+  const nodeInfoListUrl = `${url.protocol}//${url.hostname}/.well-known/nodeinfo`;
+  const nodeInfoList = await axios
+    .get(nodeInfoListUrl, {
+      timeout: 5000,
+      headers: {
+        Accept: "application/json",
+      },
+    })
+    .then((res) => res)
+    .then((res) => res.data)
+    .then(nodeInfoListValidator.parseAsync)
+    .catch(() => null);
+
+  logger.debug(
+    `Got node info from ${nodeInfoListUrl}`,
+    JSON.stringify(nodeInfoList),
+  );
+
+  if (!nodeInfoList) {
+    return null;
+  }
+
+  const nodeInfoHref = nodeInfoList.links.find((link) =>
+    link.rel.startsWith("http://nodeinfo.diaspora.software/ns/schema/2."),
+  )?.href;
+
+  if (!nodeInfoHref) {
+    return null;
+  }
+
+  const nodeInfoValidator = z.object({
+    software: z.object({
+      name: z.string(),
+      version: z.string(),
+    }),
+  });
+  const nodeInfo = await axios
+    .get(nodeInfoHref, {
+      timeout: 5000,
+      headers: {
+        Accept: "application/json",
+      },
+    })
+    .then((res) => res.data)
+    .then(nodeInfoValidator.parseAsync)
+    .catch(() => null);
+
+  logger.debug(`Got node info from ${nodeInfoHref}`, JSON.stringify(nodeInfo));
+
+  return nodeInfo;
+};
+
+/**
  *
  * @param {AppRequest} req
  * @param {AppResponse} res
  * @param {URL} url
  */
 const handleActivityPub = async (req, res, url) => {
-  const getSofwareName = async () => {
-    const nodeInfoListValidator = z.object({
-      links: z.array(
-        z.object({
-          rel: z.string(),
-          href: z.string().url(),
-        }),
-      ),
-    });
-
-    const nodeInfoListUrl = `${url.protocol}//${url.hostname}/.well-known/nodeinfo`;
-    const nodeInfoList = await axios
-      .get(nodeInfoListUrl, {
-        timeout: 5000,
-        headers: {
-          Accept: "application/json",
-        },
-      })
-      .then((res) => res)
-      .then((res) => res.data)
-      .then(nodeInfoListValidator.parseAsync)
-      .catch(() => null);
-
-    logger.debug(
-      `Got node info from ${nodeInfoListUrl}`,
-      JSON.stringify(nodeInfoList),
-    );
-
-    if (!nodeInfoList) {
-      return null;
-    }
-
-    const nodeInfoHref = nodeInfoList.links.find((link) =>
-      link.rel.startsWith("http://nodeinfo.diaspora.software/ns/schema/2."),
-    )?.href;
-
-    if (!nodeInfoHref) {
-      return null;
-    }
-
-    const nodeInfoValidator = z.object({
-      software: z.object({
-        name: z.string(),
-        version: z.string(),
-      }),
-    });
-    const nodeInfo = await axios
-      .get(nodeInfoHref, {
-        timeout: 5000,
-        headers: {
-          Accept: "application/json",
-        },
-      })
-      .then((res) => res.data)
-      .then(nodeInfoValidator.parseAsync)
-      .catch(() => null);
-
-    logger.debug(
-      `Got node info from ${nodeInfoHref}`,
-      JSON.stringify(nodeInfo),
-    );
-
-    return nodeInfo;
-  };
-
   const instanceHandlers = {
     mastodon: () => handleMastodonToot(req, res, url),
     misskey: () => handleMisskeyPost(req, res, url),
@@ -1112,7 +1112,7 @@ const handleActivityPub = async (req, res, url) => {
       .end();
   }
 
-  const nodeInfo = await getSofwareName();
+  const nodeInfo = await getNodeInfo(url);
   if (!nodeInfo) {
     return res
       .status(StatusCodes.NOT_FOUND)
