@@ -489,6 +489,19 @@ const handleMastodonToot = async (req, res, url) => {
     return res.sendStatus(StatusCodes.NOT_FOUND);
   }
 
+  const tootUrl = new URL(tootInfo.url);
+
+  if (tootUrl.hostname !== url.hostname) {
+    logger.debug(
+      "Toot URL not from this instance, replacing",
+      url.hostname,
+      "->",
+      tootUrl.hostname,
+    );
+
+    return handleActivityPub(req, res, tootUrl);
+  }
+
   const context = await newBrowserContext();
   req.$browserContext = context;
 
@@ -879,6 +892,123 @@ const handleTumblrPost = async (req, res, url) => {
   return res.end(buffer);
 };
 
+/**
+ *
+ * @param {AppRequest} req
+ * @param {AppResponse} res
+ * @param {URL} url
+ */
+const handleActivityPub = async (req, res, url) => {
+  const getSofwareName = async () => {
+    const nodeInfoListValidator = z.object({
+      links: z.array(
+        z.object({
+          rel: z.string(),
+          href: z.string().url(),
+        }),
+      ),
+    });
+
+    const nodeInfoListUrl = `${url.protocol}//${url.hostname}/.well-known/nodeinfo`;
+    const nodeInfoList = await axios
+      .get(nodeInfoListUrl, {
+        timeout: 5000,
+        headers: {
+          Accept: "application/json",
+        },
+      })
+      .then((res) => res)
+      .then((res) => res.data)
+      .then(nodeInfoListValidator.parseAsync)
+      .catch(() => null);
+
+    logger.debug(
+      `Got node info from ${nodeInfoListUrl}`,
+      JSON.stringify(nodeInfoList),
+    );
+
+    if (!nodeInfoList) {
+      return null;
+    }
+
+    const nodeInfoHref = nodeInfoList.links.find((link) =>
+      link.rel.startsWith("http://nodeinfo.diaspora.software/ns/schema/2."),
+    )?.href;
+
+    if (!nodeInfoHref) {
+      return null;
+    }
+
+    const nodeInfoValidator = z.object({
+      software: z.object({
+        name: z.string(),
+        version: z.string(),
+      }),
+    });
+    const nodeInfo = await axios
+      .get(nodeInfoHref, {
+        timeout: 5000,
+        headers: {
+          Accept: "application/json",
+        },
+      })
+      .then((res) => res.data)
+      .then(nodeInfoValidator.parseAsync)
+      .catch(() => null);
+
+    logger.debug(
+      `Got node info from ${nodeInfoHref}`,
+      JSON.stringify(nodeInfo),
+    );
+
+    return nodeInfo;
+  };
+
+  const instanceHandlers = {
+    mastodon: () => handleMastodonToot(req, res, url),
+  };
+
+  if (!req.$seenUrls) {
+    req.$seenUrls = [];
+  }
+
+  if (req.$seenUrls.length > 5 || req.$seenUrls.includes(url.toString())) {
+    return res
+      .status(StatusCodes.IM_A_TEAPOT)
+      .send(
+        `Detected a loop in post URLs (${req.$seenUrls.join(
+          " -> ",
+        )}). Aborting.`,
+      )
+      .end();
+  }
+
+  const nodeInfo = await getSofwareName();
+  if (!nodeInfo) {
+    return res
+      .status(StatusCodes.NOT_FOUND)
+      .send("Could not get node info from the server")
+      .end();
+  }
+
+  const softwareName = nodeInfo.software.name;
+  logger.debug("Getting", softwareName, "instance handler");
+  const handler = instanceHandlers[softwareName];
+
+  if (!handler) {
+    return res
+      .status(StatusCodes.UNPROCESSABLE_ENTITY)
+      .send(
+        `Don't know how to handle ${JSON.stringify(softwareName)} instances`,
+      )
+      .end();
+  }
+
+  req.$seenUrls.push(url.toString());
+
+  return handler();
+};
+
 app.get("/healthz", (_req, res) => {
   return res.sendStatus(StatusCodes.OK);
 });
@@ -942,7 +1072,7 @@ app.get(
           return handleTumblrPost(req, res, parsedUrl);
         }
 
-        return handleMastodonToot(req, res, parsedUrl);
+        return handleActivityPub(req, res, parsedUrl);
       }
     }
   }),
