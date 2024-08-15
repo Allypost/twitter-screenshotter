@@ -11,6 +11,7 @@ const morgan = require("morgan");
 const slowDown = require("express-slow-down");
 const RedisStore = require("rate-limit-redis");
 const axios = require("axios").default;
+const { z } = require("zod");
 
 const HOST = process.env.HOST || "localhost";
 const PORT = process.env.PORT || 8080;
@@ -68,6 +69,10 @@ class Logger {
     }
 
     this.#log("[DEBUG]", ...args);
+  }
+
+  warn(...args) {
+    this.#log("[WARN]", ...args);
   }
 }
 
@@ -130,7 +135,7 @@ const asyncReq =
     try {
       await handler(req, res);
     } catch (e) {
-      logger.debug(e);
+      logger.warn("Handler failed", e);
 
       res.sendStatus(StatusCodes.INTERNAL_SERVER_ERROR);
     }
@@ -138,8 +143,9 @@ const asyncReq =
     try {
       await req.$browserContext?.close();
       req.$browserContext = null;
+      logger.debug("Closed browser context");
     } catch (e) {
-      logger.debug(e);
+      logger.warn("Failed to close browser context", e);
     }
   };
 const app = express();
@@ -464,6 +470,9 @@ const handleMastodonToot = async (req, res, url) => {
     return res.sendStatus(StatusCodes.UNPROCESSABLE_ENTITY);
   }
 
+  const tootInfoValidator = z.object({
+    url: z.string().url(),
+  });
   const tootInfo = await axios
     .get(`https://${url.hostname}/api/v1/statuses/${tootId}`, {
       timeout: 5000,
@@ -472,9 +481,10 @@ const handleMastodonToot = async (req, res, url) => {
       },
     })
     .then((res) => res.data)
+    .then(tootInfoValidator.parseAsync)
     .catch(() => null);
 
-  if (!tootInfo || !("url" in tootInfo) || typeof tootInfo.url !== "string") {
+  if (!tootInfo) {
     logger.debug("Toot not found", tootId);
     return res.sendStatus(StatusCodes.NOT_FOUND);
   }
