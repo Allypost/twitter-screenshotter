@@ -559,6 +559,10 @@ const handleMastodonToot = async (req, res, url) => {
     "Cache-Control",
     `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
   );
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="toot.${url.hostname}.${tootId}.${SCREENSHOT_CONFIG.type}"`,
+  );
 
   return res.end(buffer);
 };
@@ -647,6 +651,10 @@ const handleTwitterTweet = async (req, res, url) => {
   res.setHeader(
     "Cache-Control",
     `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
+  );
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="tweet.${tweetId}.${SCREENSHOT_CONFIG.type}"`,
   );
 
   return res.end(buffer);
@@ -831,6 +839,11 @@ const handleTumblrPost = async (req, res, url) => {
   res.setHeader(
     "Cache-Control",
     `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
+  );
+  const [username, postId] = url.pathname.replace(/^\/*/, "").split("/");
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="tumblr.${username}.${postId}.${SCREENSHOT_CONFIG.type}"`,
   );
 
   return res.end(buffer);
