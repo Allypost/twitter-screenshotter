@@ -38,8 +38,8 @@ const SCREENSHOT_CONFIG = (() => {
 
     default: {
       return {
-        omitBackground: true,
-        quality: 95,
+        omitBackground: false,
+        quality: 85,
         type: "jpeg",
       };
     }
