@@ -215,21 +215,19 @@ const renderTweetPage = async (context, url) => {
     });
   }
 
-  // Remove tweet actions (eg. Like, Retweet, Reply, etc.)
+  // Remove everything below tweet meta (reposts, quotes, likes, etc.)
   {
     await tweet$.evaluate(($tweet) => {
-      const $likeBtn = $tweet.querySelector('[aria-label="Like"]');
+      const $tweetMeta = $tweet.querySelector(
+        '*[role="group"]:has([role="separator"])',
+      );
 
-      let $tweetActions = $likeBtn;
-      while ($tweetActions && $tweetActions.getAttribute("role") !== "group") {
-        $tweetActions = $tweetActions.parentNode;
+      let $nextElement = $tweetMeta?.nextSibling;
+      while ($nextElement) {
+        let $elementToRemove = $nextElement;
+        $nextElement = $nextElement.nextSibling; // Move to the next sibling
+        $elementToRemove.parentNode.removeChild($elementToRemove); // Remove the current sibling
       }
-
-      if (!$tweetActions) {
-        return;
-      }
-
-      $tweetActions.parentNode.removeChild($tweetActions);
     });
   }
 
