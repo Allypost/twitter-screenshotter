@@ -94,6 +94,29 @@ let BROWSER;
 
 /**
  *
+ * @param {(import "playwright").BrowserContextOptions} [options]
+ * @returns
+ */
+const newBrowserContext = (options) => {
+  return BROWSER.newContext({
+    acceptDownloads: false,
+    locale: "en-US",
+    viewport: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+    screen: {
+      width: BROWSER_INFO.width,
+      height: BROWSER_INFO.height,
+    },
+    colorScheme: "dark",
+    // reducedMotion: "reduce",
+    ...options,
+  });
+};
+
+/**
+ *
  * @param {(req: AppRequest, res: AppResponse) => any} handler
  * @returns
  */
@@ -114,6 +137,7 @@ const asyncReq =
 
     try {
       await req.$browserContext?.close();
+      req.$browserContext = null;
     } catch (e) {
       logger.debug(e);
     }
@@ -455,29 +479,8 @@ const handleMastodonToot = async (req, res, url) => {
     return res.sendStatus(StatusCodes.NOT_FOUND);
   }
 
-  const BROWSER_INFO = {
-    width: 720,
-    height: 2160,
-  };
-  req.$browserContext =
-    req.$browserContext ??
-    (await BROWSER.newContext({
-      acceptDownloads: false,
-      locale: "en-US",
-      viewport: {
-        width: BROWSER_INFO.width,
-        height: BROWSER_INFO.height,
-      },
-      screen: {
-        width: BROWSER_INFO.width,
-        height: BROWSER_INFO.height,
-      },
-    }));
-
-  /**
-   * @type {(import "playwright").BrowserContext}
-   */
-  const context = req.$browserContext;
+  const context = await newBrowserContext();
+  req.$browserContext = context;
 
   const buffer = await (async (context, url) => {
     logger.debug("Start rendering Mastodon page", url.toString());
@@ -651,18 +654,7 @@ const handleTwitterTweet = async (req, res, url) => {
     }
   }
 
-  const context = await BROWSER.newContext({
-    acceptDownloads: false,
-    locale: "en-US",
-    viewport: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
-    },
-    screen: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
-    },
-  });
+  const context = await newBrowserContext();
   req.$browserContext = context;
 
   const buffer = await renderTweet(context, url);
@@ -691,22 +683,7 @@ const handleTwitterTweet = async (req, res, url) => {
 const handleTumblrPost = async (req, res, url) => {
   logger.debug("Tumblr URL", url.toString());
 
-  const BROWSER_INFO = {
-    width: 720,
-    height: 720 * 6,
-  };
-  const context = await BROWSER.newContext({
-    acceptDownloads: false,
-    locale: "en-US",
-    viewport: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
-    },
-    screen: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
-    },
-  });
+  const context = await newBrowserContext();
   req.$browserContext = context;
 
   const buffer = await (async (context, url) => {
