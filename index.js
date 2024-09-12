@@ -215,6 +215,32 @@ const renderTweetPage = async (context, url) => {
     });
   }
 
+  // Remove Follow button and dots
+  {
+    const layers$ = await page.$('[data-testid="User-Name"]');
+
+    if (layers$) {
+      await layers$.evaluate(($username) => {
+        let $node = $username.parentNode;
+        while (
+          $node &&
+          $node !== document.body &&
+          $node.childElementCount === 1
+        ) {
+          $node = $node.parentElement;
+        }
+
+        if (!$node) {
+          return;
+        }
+
+        const $lastChild = $node.lastChild;
+
+        $lastChild.parentElement.removeChild($lastChild);
+      });
+    }
+  }
+
   // Remove everything below tweet meta (reposts, quotes, likes, etc.)
   {
     await tweet$.evaluate(($tweet) => {
