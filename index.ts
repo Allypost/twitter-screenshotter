@@ -136,43 +136,6 @@ const asyncReq =
     }
   };
 
-const app = express();
-
-app.disable("x-powered-by");
-app.set("trust proxy", Number(process.env.TRUST_PROXY ?? "2"));
-
-app.use(morgan("combined"));
-
-app.use(bodyParserUrlencoded());
-
-const slowDownOptions = {
-  windowMs: REQUESTS_MEASURE_WINDOW_SECONDS * 1000,
-  delayAfter: REQUESTS_PER_SECOND * REQUESTS_MEASURE_WINDOW_SECONDS,
-  delayMs(used) {
-    const delayMs = 734;
-
-    return (used - (this.delayAfter as number)) * delayMs;
-  },
-} as Partial<SlowDownOptions>;
-
-if (process.env.REDIS_URL && String(process.env.REDIS_URL).trim().length > 0) {
-  const client = createClient({
-    url: process.env.REDIS_URL,
-  });
-  void client.connect().catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
-  console.log("|>", process.env.REDIS_URL);
-  slowDownOptions.store = new RedisStore({
-    sendCommand: (...args) => client.sendCommand(args),
-  });
-}
-
-const speedLimiter = slowDown(slowDownOptions);
-
-const indexFile = fs.readFileSync("./index.html");
-
 type Renderer = (
   context: BrowserContext,
   url: URL,
@@ -451,23 +414,6 @@ const renderTweet: Renderer = (context, url) =>
   renderTweetPage(context, url).then(
     (data) => data || renderTweetEmbedded(context, url),
   );
-
-app.get("/", (_req, res) => {
-  res.set("Content-Type", "text/html; charset=utf-8").end(indexFile);
-});
-
-const faviconFile = fs.readFileSync("./favicon.ico");
-app.get("/favicon.ico", (_req, res) => {
-  res.end(faviconFile);
-});
-
-app.post("/", (req, res) => {
-  if (!req.body || !req.body.url) {
-    return res.sendStatus(StatusCodes.UNSUPPORTED_MEDIA_TYPE);
-  }
-
-  res.redirect(`/${req.body.url}`);
-});
 
 type RequestHandler = (req: AppRequest, res: AppResponse, url: URL) => unknown;
 
@@ -1139,86 +1085,142 @@ const handleActivityPub: RequestHandler = async (req, res, url) => {
   return handler();
 };
 
-app.get("/healthz", (_req, res) => {
-  return res.sendStatus(StatusCodes.OK);
-});
+async function main() {
+  if (IS_DEV) {
+    console.clear();
+  }
 
-app.get(
-  "/*",
-  speedLimiter,
-  asyncReq(async (req, res) => {
-    let parsedUrl = null as URL | null;
-    {
-      const twitterUrl = req.params[0];
-      try {
-        logger.debug("Starting processing", twitterUrl);
+  BROWSER = await BrowserInstance.launch();
 
-        if (twitterUrl) {
-          parsedUrl = new URL(twitterUrl);
+  const app = express();
+
+  app.disable("x-powered-by");
+  app.set("trust proxy", Number(process.env.TRUST_PROXY ?? "2"));
+
+  app.use(morgan("combined"));
+
+  app.use(bodyParserUrlencoded());
+
+  const slowDownOptions = {
+    windowMs: REQUESTS_MEASURE_WINDOW_SECONDS * 1000,
+    delayAfter: REQUESTS_PER_SECOND * REQUESTS_MEASURE_WINDOW_SECONDS,
+    delayMs(used) {
+      const delayMs = 734;
+
+      return (used - (this.delayAfter as number)) * delayMs;
+    },
+  } as Partial<SlowDownOptions>;
+
+  if (
+    process.env.REDIS_URL &&
+    String(process.env.REDIS_URL).trim().length > 0
+  ) {
+    console.log("|>", process.env.REDIS_URL);
+    const client = createClient({
+      url: process.env.REDIS_URL,
+    });
+    await client.connect();
+    slowDownOptions.store = new RedisStore({
+      sendCommand: (...args) => client.sendCommand(args),
+    });
+  }
+
+  const speedLimiter = slowDown(slowDownOptions);
+
+  const indexFile = fs.readFileSync("./index.html");
+  app.get("/", (_req, res) => {
+    res.set("Content-Type", "text/html; charset=utf-8").end(indexFile);
+  });
+
+  const faviconFile = fs.readFileSync("./favicon.ico");
+  app.get("/favicon.ico", (_req, res) => {
+    res.end(faviconFile);
+  });
+
+  app.post("/", (req, res) => {
+    if (!req.body || !req.body.url) {
+      return res.sendStatus(StatusCodes.UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    res.redirect(`/${req.body.url}`);
+  });
+
+  app.get("/healthz", (_req, res) => {
+    return res.sendStatus(StatusCodes.OK);
+  });
+
+  app.get(
+    "/*",
+    speedLimiter,
+    asyncReq(async (req, res) => {
+      let parsedUrl = null as URL | null;
+      {
+        const twitterUrl = req.params[0];
+        try {
+          logger.debug("Starting processing", twitterUrl);
+
+          if (twitterUrl) {
+            parsedUrl = new URL(twitterUrl);
+          }
+        } catch (e) {
+          logger.debug("URL parse failed", twitterUrl, e);
         }
-      } catch (e) {
-        logger.debug("URL parse failed", twitterUrl, e);
-      }
-    }
-
-    if (!parsedUrl) {
-      return res.sendStatus(StatusCodes.BAD_REQUEST);
-    }
-
-    switch (parsedUrl.hostname) {
-      case "twitter.com":
-      case "x.com":
-      case "www.x.com":
-      case "www.twitter.com": {
-        parsedUrl.hostname = "twitter.com";
-        parsedUrl.protocol = "https:";
-
-        return handleTwitterTweet(req, res, parsedUrl);
       }
 
-      case "tumblr.com":
-      case "www.tumblr.com": {
-        parsedUrl.hostname = "www.tumblr.com";
-        parsedUrl.protocol = "https:";
-
-        return handleTumblrPost(req, res, parsedUrl);
+      if (!parsedUrl) {
+        return res.sendStatus(StatusCodes.BAD_REQUEST);
       }
 
-      default: {
-        const tumblrSubdomainPost = parsedUrl
-          .toString()
-          .match(
-            /^https?:\/\/(?<subdomain>[^\-][a-zA-Z0-9\-]{0,30}[^\-])\.tumblr\.com\/post\/(?<postId>[\d]+)(?:\/(?<postSlug>[^\/]+))?/i,
-          )?.groups;
-        if (tumblrSubdomainPost) {
+      switch (parsedUrl.hostname) {
+        case "twitter.com":
+        case "x.com":
+        case "www.x.com":
+        case "www.twitter.com": {
+          parsedUrl.hostname = "twitter.com";
+          parsedUrl.protocol = "https:";
+
+          return handleTwitterTweet(req, res, parsedUrl);
+        }
+
+        case "tumblr.com":
+        case "www.tumblr.com": {
           parsedUrl.hostname = "www.tumblr.com";
           parsedUrl.protocol = "https:";
-          parsedUrl.pathname = `/${tumblrSubdomainPost.subdomain}/${tumblrSubdomainPost.postId}`;
-          if (tumblrSubdomainPost.postSlug) {
-            parsedUrl.pathname += `/${tumblrSubdomainPost.postSlug}`;
-          }
 
           return handleTumblrPost(req, res, parsedUrl);
         }
 
-        return handleActivityPub(req, res, parsedUrl);
-      }
-    }
-  }),
-);
+        default: {
+          const tumblrSubdomainPost = parsedUrl
+            .toString()
+            .match(
+              /^https?:\/\/(?<subdomain>[^\-][a-zA-Z0-9\-]{0,30}[^\-])\.tumblr\.com\/post\/(?<postId>[\d]+)(?:\/(?<postSlug>[^\/]+))?/i,
+            )?.groups;
+          if (tumblrSubdomainPost) {
+            parsedUrl.hostname = "www.tumblr.com";
+            parsedUrl.protocol = "https:";
+            parsedUrl.pathname = `/${tumblrSubdomainPost.subdomain}/${tumblrSubdomainPost.postId}`;
+            if (tumblrSubdomainPost.postSlug) {
+              parsedUrl.pathname += `/${tumblrSubdomainPost.postSlug}`;
+            }
 
-if (IS_DEV) {
-  console.clear();
+            return handleTumblrPost(req, res, parsedUrl);
+          }
+
+          return handleActivityPub(req, res, parsedUrl);
+        }
+      }
+    }),
+  );
+
+  app.listen(PORT, HOST, () => {
+    // Cache thing: 1
+    console.error("|> Environment:", JSON.stringify(process.env));
+    console.error(`|> Listening on http://${HOST}:${PORT}`);
+  });
 }
 
-Promise.resolve()
-  .then(async () => {
-    BROWSER = await BrowserInstance.launch();
-  })
-  .then(() => {
-    app.listen(PORT, HOST, () => {
-      // Cache thing: 1
-      console.error("|> Environment:", JSON.stringify(process.env));
-      console.error(`|> Listening on http://${HOST}:${PORT}`);
-    });
-  });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
