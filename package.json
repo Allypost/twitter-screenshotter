@@ -9,6 +9,7 @@
     "start": "NODE_ENV=production bun dist/index.js"
   },
   "dependencies": {
+    "@atproto/api": "^0.13.12",
     "axios": "^1.7.2",
     "body-parser": "^1.20.2",
     "express": "^4.19.2",

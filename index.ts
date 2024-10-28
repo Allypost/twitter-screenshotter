@@ -17,6 +17,8 @@ import axios from "axios";
 import { z } from "zod";
 import type { Request, Response } from "express";
 import { createClient } from "redis";
+import { Agent, type AtpSessionData, CredentialSession } from "@atproto/api";
+import { type PostView } from "@atproto/api/dist/client/types/app/bsky/feed/defs";
 
 const BrowserInfo = BrowserDevices["Desktop Chrome"];
 
@@ -34,6 +36,9 @@ const BROWSER_INFO = {
   width: 768,
   height: 1024,
 };
+
+let BSKY_AGENT: Agent;
+let BSKY_SESSION_DATA: string | null = null;
 
 const SCREENSHOT_CONFIG = (() => {
   switch (BrowserInstance.name()) {
@@ -1085,12 +1090,264 @@ const handleActivityPub: RequestHandler = async (req, res, url) => {
   return handler();
 };
 
+const handleBskyPost: RequestHandler = async (req, res, url) => {
+  logger.debug("BlueSky post URL", url.toString());
+
+  const matcher =
+    /^\/profile\/(?<username>[^/]+)\/post\/(?<postId>[a-zA-Z0-9]+)/;
+
+  const match = matcher.exec(url.pathname);
+
+  const username = match?.groups?.username;
+  const postId = match?.groups?.postId;
+
+  if (!match || !username || !postId) {
+    logger.debug("Invalid BlueSky post URL", url.toString());
+    return res
+      .status(StatusCodes.UNPROCESSABLE_ENTITY)
+      .send(
+        "Invalid BlueSky post URL. Should look something like https://bsky.app/profile/some.username/post/randomP0stId",
+      )
+      .end();
+  }
+
+  logger.debug("Got BlueSky post request", { username, postId });
+
+  const info = await BSKY_AGENT.app.bsky.feed
+    .getPostThread({
+      uri: `at://${username}/app.bsky.feed.post/${postId}`,
+    })
+    .catch(() => null);
+
+  if (!info || !info.data) {
+    return res
+      .status(StatusCodes.NOT_FOUND)
+      .send("Could not get post from the API")
+      .end();
+  }
+
+  const post = info.data.thread.post as PostView | null | undefined;
+
+  if (!post) {
+    return res
+      .status(StatusCodes.NOT_FOUND)
+      .send("Could not get post info from the API response")
+      .end();
+  }
+
+  const context = await newBrowserContext();
+  req.$browserContext = context;
+
+  const buffer = await (async (context, url) => {
+    logger.debug("Start rendering Bluesky page", url.toString());
+    const page = await context.newPage();
+
+    await page.goto(url.toString());
+
+    if (BSKY_SESSION_DATA) {
+      await page.evaluate((data) => {
+        window.localStorage.setItem("BSKY_STORAGE", data);
+      }, BSKY_SESSION_DATA);
+
+      await page.reload();
+    }
+
+    await page.waitForLoadState("networkidle");
+
+    const post$ = await page
+      .$(`[data-testid="postThreadItem-by-${username}"]`)
+      .catch(() => null);
+
+    if (!post$) {
+      logger.debug("Bluesky post not available");
+      return null;
+    }
+
+    // Remove post actions (eg. Like, Retweet, Reply, etc.)
+    {
+      await post$.evaluate(($el) => {
+        // Remove duplicate info toolbar
+        {
+          let $actionsContainer = $el.querySelector(
+            '[data-testid="replyBtn"]',
+          )?.parentElement;
+          while ($actionsContainer) {
+            if ($actionsContainer.childElementCount > 1) {
+              break;
+            }
+            $actionsContainer = $actionsContainer.parentElement;
+          }
+
+          $actionsContainer?.parentElement?.remove();
+        }
+
+        // Remove follow button
+        {
+          $el.querySelector('[data-testid="followBtn"]')?.remove();
+        }
+
+        // Remove who can reply bit
+        {
+          $el.querySelector('[aria-label="Who can reply"]')?.remove();
+        }
+
+        // Remove bottom border + padding
+        {
+          $el.style.marginBottom = "1rem";
+
+          let $lastEl = $el.lastChild as HTMLElement | null | undefined;
+
+          if ($lastEl) {
+            $lastEl.style.paddingBottom = "0";
+          }
+
+          $lastEl = $lastEl?.lastChild as HTMLElement | null | undefined;
+
+          if ($lastEl) {
+            $lastEl.style.borderBottom = "0";
+          }
+        }
+      });
+    }
+
+    return post$.screenshot(SCREENSHOT_CONFIG);
+  })(context, url).catch(() => null);
+
+  if (!buffer) {
+    return res.sendStatus(StatusCodes.NOT_FOUND);
+  }
+
+  res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
+  res.setHeader("Content-Length", buffer.length);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Cache-Control",
+    `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
+  );
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="bluesky-post.${username.replaceAll(
+      ".",
+      "-",
+    )}.${postId}.${SCREENSHOT_CONFIG.type}"`,
+  );
+
+  return res.end(buffer);
+};
+
 async function main() {
   if (IS_DEV) {
     console.clear();
   }
 
   BROWSER = await BrowserInstance.launch();
+
+  {
+    const bskyCredentialStore = new CredentialSession(
+      new URL(process.env.BSKY_SERVICE_URL ?? "https://bsky.social"),
+    );
+
+    BSKY_AGENT = new Agent(bskyCredentialStore);
+    {
+      const refreshJwt = process.env.BSKY_REFRESH_TOKEN;
+      const accIdentifier = process.env.BSKY_ACCOUNT_IDENTIFIER;
+      const accPassword = process.env.BSKY_ACCOUNT_PASSWORD;
+
+      if (accIdentifier && accPassword) {
+        logger.debug("Using BSKY credentials", {
+          accIdentifier,
+          accPassword,
+        });
+
+        await bskyCredentialStore.login({
+          identifier: accIdentifier,
+          password: accPassword,
+        });
+      } else if (refreshJwt) {
+        logger.debug("Using BSKY credentials", {
+          refreshJwt,
+        });
+
+        bskyCredentialStore.session = {
+          refreshJwt,
+          active: true,
+        } as unknown as AtpSessionData;
+
+        await bskyCredentialStore.refreshSession();
+      }
+
+      const session = bskyCredentialStore.session;
+
+      if (session) {
+        logger.debug("Successfully logged in to BSKY", {
+          email: session.email,
+          handle: session.handle,
+          status: session.status,
+        });
+
+        const updateBskySessionData = () => {
+          {
+            const session = bskyCredentialStore.session;
+
+            if (!session) {
+              return;
+            }
+
+            const account = {
+              accessJwt: session.accessJwt,
+              active: true,
+              did: session.did,
+              email: session.email,
+              emailAuthFactor: session.emailAuthFactor,
+              emailConfirmed: session.emailConfirmed,
+              handle: session.handle,
+              pdsUrl: bskyCredentialStore.pdsUrl?.toString(),
+              refreshJwt: session.refreshJwt,
+              service: bskyCredentialStore.serviceUrl.toString(),
+              signupQueued: false,
+            };
+
+            BSKY_SESSION_DATA = JSON.stringify({
+              colorMode: "system",
+              reminders: {
+                lastEmailConfirm: new Date().toISOString(),
+              },
+              languagePrefs: {
+                primaryLanguage: "en",
+                contentLanguages: ["en", "hr"],
+                postLanguage: "en",
+                postLanguageHistory: ["en", "hr", "ja", "pt", "de"],
+                appLanguage: "en",
+              },
+              requireAltTextEnabled: false,
+              mutedThreads: [],
+              invites: { copiedInvites: [] },
+              onboarding: { step: "Home" },
+              hiddenPosts: [],
+              hasCheckedForStarterPack: true,
+              lastSelectedHomeFeed:
+                "feedgen|at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot",
+              session: {
+                accounts: [account],
+                currentAccount: account,
+              },
+            });
+          }
+        };
+
+        updateBskySessionData();
+
+        setInterval(
+          async () => {
+            logger.debug("Refreshing BSKY credentials");
+            await bskyCredentialStore.refreshSession();
+            updateBskySessionData();
+          },
+          1000 * 60 * 60,
+        );
+      }
+    }
+  }
 
   const app = express();
 
@@ -1188,6 +1445,13 @@ async function main() {
           parsedUrl.protocol = "https:";
 
           return handleTumblrPost(req, res, parsedUrl);
+        }
+
+        case "bsky.app": {
+          parsedUrl.hostname = "bsky.app";
+          parsedUrl.protocol = "https:";
+
+          return handleBskyPost(req, res, parsedUrl);
         }
 
         default: {
