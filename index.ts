@@ -1,20 +1,27 @@
-const {
-  chromium: BrowserInstance,
-  devices: { "Desktop Chrome": BrowserInfo },
-} = require("playwright");
-const fs = require("fs");
-const https = require("node:https");
-const express = require("express");
-const bodyParser = require("body-parser");
-const { StatusCodes } = require("http-status-codes");
-const morgan = require("morgan");
-const slowDown = require("express-slow-down");
-const RedisStore = require("rate-limit-redis");
-const axios = require("axios").default;
-const { z } = require("zod");
+import {
+  chromium as BrowserInstance,
+  devices as BrowserDevices,
+  type BrowserContextOptions,
+  type Browser,
+  type BrowserContext,
+} from "playwright";
+import fs from "fs";
+import https from "node:https";
+import express from "express";
+import { urlencoded as bodyParserUrlencoded } from "body-parser";
+import { StatusCodes } from "http-status-codes";
+import morgan from "morgan";
+import { slowDown, type Options as SlowDownOptions } from "express-slow-down";
+import { RedisStore } from "rate-limit-redis";
+import axios from "axios";
+import { z } from "zod";
+import type { Request, Response } from "express";
+import { createClient } from "redis";
+
+const BrowserInfo = BrowserDevices["Desktop Chrome"];
 
 const HOST = process.env.HOST || "localhost";
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT || 8080);
 
 const REQUESTS_PER_SECOND = 1;
 const REQUESTS_MEASURE_WINDOW_SECONDS = 1 * 60; // 1 minute
@@ -34,7 +41,7 @@ const SCREENSHOT_CONFIG = (() => {
       return {
         omitBackground: true,
         type: "png",
-      };
+      } as const;
     }
 
     default: {
@@ -42,7 +49,7 @@ const SCREENSHOT_CONFIG = (() => {
         omitBackground: false,
         quality: 85,
         type: "jpeg",
-      };
+      } as const;
     }
   }
 })();
@@ -50,20 +57,20 @@ const SCREENSHOT_CONFIG = (() => {
 const EMBED_HTML = fs.readFileSync("./embed.html", "utf-8");
 
 class Logger {
-  #logInstance = console.log;
+  private logInstance = console.log;
 
-  setLogger(log) {
-    this.#logInstance = log;
+  setLogger(log: (...args: any[]) => any) {
+    this.logInstance = log;
   }
 
-  #log(...args) {
-    this.#logInstance(
+  #log(...args: any[]) {
+    this.logInstance(
       `[${new Date().toISOString()}]`,
       ...args.map((arg) => arg),
     );
   }
 
-  debug(...args) {
+  debug(...args: any[]) {
     if (!IS_DEV) {
       return;
     }
@@ -71,38 +78,23 @@ class Logger {
     this.#log("[DEBUG]", ...args);
   }
 
-  warn(...args) {
+  warn(...args: any[]) {
     this.#log("[WARN]", ...args);
   }
 }
 
 const logger = new Logger();
 
-/**
- * @type {(import "playwright").Browser}
- */
-let BROWSER;
+let BROWSER: Browser;
 
-/**
- * @typedef {(import "playwright").BrowserContext} BrowserContext
- */
+type AppRequest = Request & {
+  $browserContext: BrowserContext | null | undefined;
+  $seenUrls: string[] | undefined;
+};
 
-/**
- * Request object with browser context
- * @typedef {(import "express").Request & { $browserContext: BrowserContext | null | undefined, $seenUrls: string[] | undefined }} AppRequest
- */
+type AppResponse = Response;
 
-/**
- * Request object with browser context
- * @typedef {(import "express").Response} AppResponse
- */
-
-/**
- *
- * @param {(import "playwright").BrowserContextOptions} [options]
- * @returns
- */
-const newBrowserContext = (options) => {
+const newBrowserContext = (options?: BrowserContextOptions) => {
   return BROWSER.newContext({
     acceptDownloads: false,
     locale: "en-US",
@@ -120,18 +112,13 @@ const newBrowserContext = (options) => {
   });
 };
 
-/**
- *
- * @param {(req: AppRequest, res: AppResponse) => any} handler
- * @returns
- */
+type AppHandler = (req: AppRequest, res: AppResponse) => any;
+
 const asyncReq =
-  (handler) =>
-  /**
-   * @param {AppRequest} req
-   * @param {AppResponse} res
-   */
-  async (req, res) => {
+  (handler: AppHandler) => async (rreq: Request, rres: Response) => {
+    const req = rreq as AppRequest;
+    const res = rres as AppResponse;
+
     try {
       await handler(req, res);
     } catch (e) {
@@ -148,26 +135,37 @@ const asyncReq =
       logger.warn("Failed to close browser context", e);
     }
   };
+
 const app = express();
 
 app.disable("x-powered-by");
-app.enable("trust proxy");
+app.set("trust proxy", Number(process.env.TRUST_PROXY ?? "2"));
 
 app.use(morgan("combined"));
 
-app.use(bodyParser.urlencoded());
+app.use(bodyParserUrlencoded());
 
 const slowDownOptions = {
   windowMs: REQUESTS_MEASURE_WINDOW_SECONDS * 1000,
   delayAfter: REQUESTS_PER_SECOND * REQUESTS_MEASURE_WINDOW_SECONDS,
-  delayMs: 734,
-  headers: true,
-};
+  delayMs(used) {
+    const delayMs = 734;
+
+    return (used - (this.delayAfter as number)) * delayMs;
+  },
+} as Partial<SlowDownOptions>;
 
 if (process.env.REDIS_URL && String(process.env.REDIS_URL).trim().length > 0) {
+  const client = createClient({
+    url: process.env.REDIS_URL,
+  });
+  void client.connect().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
   console.log("|>", process.env.REDIS_URL);
   slowDownOptions.store = new RedisStore({
-    redisURL: process.env.REDIS_URL,
+    sendCommand: (...args) => client.sendCommand(args),
   });
 }
 
@@ -175,14 +173,12 @@ const speedLimiter = slowDown(slowDownOptions);
 
 const indexFile = fs.readFileSync("./index.html");
 
-/**
- *
- * @param {BrowserContext} context
- * @param {URL} url
- *
- * @returns {Promise<Buffer | null>} Screenshot buffer
- */
-const renderTweetPage = async (context, url) => {
+type Renderer = (
+  context: BrowserContext,
+  url: URL,
+) => Promise<Buffer | null | undefined>;
+
+const renderTweetPage: Renderer = async (context, url) => {
   logger.debug("Start rendering twitter page", url.toString());
   const page = await context.newPage();
 
@@ -197,7 +193,7 @@ const renderTweetPage = async (context, url) => {
       "Tweet not available, reason:",
       await page
         .$("data-testid=cellInnerDiv >> nth=0")
-        .then((el) => el.innerText()),
+        .then((el) => el?.innerText()),
     );
     return null;
   }
@@ -206,12 +202,18 @@ const renderTweetPage = async (context, url) => {
     "data-testid=cellInnerDiv >> nth=0 >> data-testid=tweet >> ..",
   );
 
+  if (!tweet$) {
+    logger.warn("Tweet element not found");
+
+    return null;
+  }
+
   // Remove bottom popups (eg. Accept cookies, sign in, etc.)
   {
     const layers$ = await page.$("#layers");
 
-    await layers$.evaluate((el) => {
-      el.parentNode.removeChild(el);
+    await layers$?.evaluate((el) => {
+      el.parentNode?.removeChild(el);
     });
   }
 
@@ -236,7 +238,7 @@ const renderTweetPage = async (context, url) => {
 
         const $lastChild = $node.lastChild;
 
-        $lastChild.parentElement.removeChild($lastChild);
+        $lastChild?.parentElement?.removeChild($lastChild);
       });
     }
   }
@@ -252,7 +254,7 @@ const renderTweetPage = async (context, url) => {
       while ($nextElement) {
         let $elementToRemove = $nextElement;
         $nextElement = $nextElement.nextSibling; // Move to the next sibling
-        $elementToRemove.parentNode.removeChild($elementToRemove); // Remove the current sibling
+        $elementToRemove.parentNode?.removeChild($elementToRemove); // Remove the current sibling
       }
     });
   }
@@ -269,10 +271,11 @@ const renderTweetPage = async (context, url) => {
       }
 
       const $sensitiveContentPopup =
-        $settingsLink.parentNode.parentNode.parentNode;
-      const $viewBtn = $sensitiveContentPopup.querySelector('[role="button"]');
+        $settingsLink.parentNode?.parentNode?.parentNode;
+      const $viewBtn =
+        $sensitiveContentPopup?.querySelector<HTMLElement>('[role="button"]');
 
-      $viewBtn.click();
+      $viewBtn?.click();
 
       return true;
     });
@@ -293,19 +296,12 @@ const renderTweetPage = async (context, url) => {
 
   await page
     .$('div[aria-label="Home timeline"] > :nth-child(1)')
-    .then((el$) => el$.evaluate(($el) => $el.remove()));
+    .then((el$) => el$?.evaluate(($el) => $el.remove()));
 
   return tweet$.screenshot(SCREENSHOT_CONFIG);
 };
 
-/**
- *
- * @param {BrowserContext} context
- * @param {URL} url
- *
- * @returns {Promise<Buffer>} Screenshot buffer
- */
-const renderTweetEmbedded = async (context, url) => {
+const renderTweetEmbedded: Renderer = async (context, url) => {
   logger.debug("Start rendering embedded page", url.toString());
 
   const page = await context.newPage();
@@ -317,17 +313,18 @@ const renderTweetEmbedded = async (context, url) => {
   const tweetIframe = await page.waitForSelector(
     ".twitter-tweet-rendered iframe",
   );
-  const frame = await tweetIframe.contentFrame();
+  const frame = (await tweetIframe.contentFrame())!;
 
   {
     const retweetLink = await frame
       .$$('a[role="link"]')
       .then((links) => links.pop());
 
-    await retweetLink.evaluate((el) => {
-      const $retweetDiv = el.parentNode;
-      $retweetDiv.parentNode.removeChild($retweetDiv);
-    });
+    if (retweetLink)
+      await retweetLink.evaluate((el) => {
+        const $retweetDiv = el.parentNode;
+        $retweetDiv?.parentNode?.removeChild($retweetDiv);
+      });
   }
 
   {
@@ -335,22 +332,24 @@ const renderTweetEmbedded = async (context, url) => {
       'a[role="link"][aria-label^="Like."]',
     );
 
-    await copyLinkToTweetLink.evaluate((el) => {
-      const $actions = el.parentNode;
-      const $copyLinkToTweet = $actions.querySelector('div[role="button"]');
+    if (copyLinkToTweetLink)
+      await copyLinkToTweetLink.evaluate((el) => {
+        const $actions = el.parentNode;
+        const $copyLinkToTweet = $actions?.querySelector('div[role="button"]');
 
-      $copyLinkToTweet.parentNode.removeChild($copyLinkToTweet);
-    });
+        $copyLinkToTweet?.parentNode?.removeChild($copyLinkToTweet);
+      });
   }
 
   // Show sensitive media
   {
     const tweetText$ = await frame.$("data-testid=tweetText");
 
-    const clicked = await tweetText$.evaluate(($tweetText) => {
-      const $tweetContents = $tweetText.parentNode.parentNode;
-      const $viewBtn = $tweetContents.querySelector('[role="button"]');
-      if (!$viewBtn || !$viewBtn.innerText === "View") {
+    const clicked = await tweetText$?.evaluate(($tweetText) => {
+      const $tweetContents = $tweetText.parentNode?.parentNode;
+      const $viewBtn =
+        $tweetContents?.querySelector<HTMLElement>('[role="button"]');
+      if (!$viewBtn || $viewBtn.innerText !== "View") {
         return false;
       }
 
@@ -369,7 +368,7 @@ const renderTweetEmbedded = async (context, url) => {
   {
     const tweetText$ = await frame.$("data-testid=tweetText");
 
-    await tweetText$.evaluate(
+    await tweetText$?.evaluate(
       ($tweetText, data) => {
         const $backlinks = document.querySelectorAll(
           `a[href*="twitter.com${data.pathname}"]`,
@@ -379,22 +378,22 @@ const renderTweetEmbedded = async (context, url) => {
           if (
             $backlink.textContent === "Read the full conversation on Twitter"
           ) {
-            const $container = $backlink.parentNode.parentNode;
-            $container.parentNode.removeChild($container);
+            const $container = $backlink.parentNode?.parentNode;
+            $container?.parentNode?.removeChild($container);
             break;
           }
         }
 
-        const $tweetContents = $tweetText.parentNode.parentNode;
-        const $tweet = $tweetContents.parentNode;
+        const $tweetContents = $tweetText.parentNode?.parentNode;
+        const $tweet = $tweetContents?.parentNode;
 
-        const hasSiblings = $tweet.childNodes.length > 1;
+        const hasSiblings = $tweet && $tweet.childNodes.length > 1;
 
         if (!hasSiblings) {
           return;
         }
 
-        $tweet.removeChild($tweet.childNodes[0]);
+        $tweet.removeChild($tweet.childNodes[0]!);
       },
       {
         pathname: url.pathname,
@@ -405,13 +404,13 @@ const renderTweetEmbedded = async (context, url) => {
   // Remove Twitter branding
   {
     const body$ = await frame.$("body");
-    await body$.evaluate(
+    await body$?.evaluate(
       (document, data) => {
         const $backlinks = document.querySelectorAll(
           `a[href*="twitter.com${data.pathname}"]`,
         );
         for (const $backlink of $backlinks) {
-          if ($backlink.textContent.includes("·")) {
+          if ($backlink.textContent?.includes("·")) {
             continue;
           }
 
@@ -419,14 +418,14 @@ const renderTweetEmbedded = async (context, url) => {
             continue;
           }
 
-          $backlink.parentNode.removeChild($backlink);
+          $backlink.parentNode?.removeChild($backlink);
         }
 
         const $infoBtn = document.querySelector(
           '[aria-label="Twitter Ads info and privacy"]',
         );
         if ($infoBtn) {
-          $infoBtn.parentNode.removeChild($infoBtn);
+          $infoBtn.parentNode?.removeChild($infoBtn);
         }
 
         const $followBtn = document.querySelector(
@@ -434,7 +433,7 @@ const renderTweetEmbedded = async (context, url) => {
         );
         if ($followBtn) {
           const $followBtnContainer = $followBtn.parentNode;
-          $followBtnContainer.parentNode.removeChild($followBtnContainer);
+          $followBtnContainer?.parentNode?.removeChild($followBtnContainer);
         }
       },
       {
@@ -443,22 +442,16 @@ const renderTweetEmbedded = async (context, url) => {
     );
   }
 
-  const tweet = await frame.$("#app");
+  const tweet = (await frame.$("#app"))!;
 
   return tweet.screenshot(SCREENSHOT_CONFIG);
 };
 
-/**
- *
- * @param {BrowserContext} context
- * @param {URL} url
- *
- * @returns {Promise<Buffer>} Screenshot buffer
- */
-const renderTweet = (context, url) =>
+const renderTweet: Renderer = (context, url) =>
   renderTweetPage(context, url).then(
     (data) => data || renderTweetEmbedded(context, url),
   );
+
 app.get("/", (_req, res) => {
   res.set("Content-Type", "text/html; charset=utf-8").end(indexFile);
 });
@@ -476,14 +469,9 @@ app.post("/", (req, res) => {
   res.redirect(`/${req.body.url}`);
 });
 
-/**
- *
- * @param {AppRequest} req
- * @param {AppResponse} res
- * @param {URL} url
- * @returns
- */
-const handleMastodonToot = async (req, res, url) => {
+type RequestHandler = (req: AppRequest, res: AppResponse, url: URL) => unknown;
+
+const handleMastodonToot: RequestHandler = async (req, res, url) => {
   logger.debug("Toot URL", url.toString());
 
   const urlPath = url.pathname.replace(/\/$/, "");
@@ -569,7 +557,7 @@ const handleMastodonToot = async (req, res, url) => {
         while (nextElement) {
           let elementToRemove = nextElement;
           nextElement = nextElement.nextSibling; // Move to the next sibling
-          elementToRemove.parentNode.removeChild(elementToRemove); // Remove the current sibling
+          elementToRemove.parentNode?.removeChild(elementToRemove); // Remove the current sibling
         }
 
         $container.style.flex = "0";
@@ -591,7 +579,7 @@ const handleMastodonToot = async (req, res, url) => {
     {
       await container$.evaluate(($el) => {
         $el
-          .querySelectorAll(
+          .querySelectorAll<HTMLElement>(
             'button.status__content__spoiler-link[aria-expanded="false"]',
           )
           .forEach(($action) => {
@@ -604,7 +592,7 @@ const handleMastodonToot = async (req, res, url) => {
     {
       await container$.evaluate(($el) => {
         $el
-          .querySelectorAll(
+          .querySelectorAll<HTMLElement>(
             '.spoiler-button > button[class="spoiler-button__overlay"]',
           )
           .forEach(($spoilerBtn) => {
@@ -647,21 +635,14 @@ const handleMastodonToot = async (req, res, url) => {
   return res.end(buffer);
 };
 
-/**
- *
- * @param {AppRequest} req
- * @param {AppResponse} res
- * @param {URL} url
- * @returns
- */
-const handleTwitterTweet = async (req, res, url) => {
+const handleTwitterTweet: RequestHandler = async (req, res, url) => {
   const tweetUrlMatch = url.pathname.match(/^\/\w{4,15}\/status\/(?<id>\d+)$/);
   if (!tweetUrlMatch) {
     logger.debug("Invalid tweet URL", url.toString());
     return res.sendStatus(StatusCodes.FORBIDDEN);
   }
 
-  const tweetId = tweetUrlMatch.groups.id;
+  const tweetId = tweetUrlMatch.groups!.id!;
   logger.debug("Tweet ID", tweetId);
   {
     /**
@@ -714,6 +695,12 @@ const handleTwitterTweet = async (req, res, url) => {
 
   const buffer = await renderTweet(context, url);
 
+  if (!buffer) {
+    return res
+      .status(StatusCodes.INTERNAL_SERVER_ERROR)
+      .send("Screenshot could not be taken");
+  }
+
   res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
   res.setHeader("Content-Length", buffer.length);
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -729,13 +716,7 @@ const handleTwitterTweet = async (req, res, url) => {
   return res.end(buffer);
 };
 
-/**
- * @param {AppRequest} req
- * @param {AppResponse} res
- * @param {URL} url
- * @returns
- */
-const handleTumblrPost = async (req, res, url) => {
+const handleTumblrPost: RequestHandler = async (req, res, url) => {
   logger.debug("Tumblr URL", url.toString());
 
   const context = await newBrowserContext();
@@ -818,7 +799,9 @@ const handleTumblrPost = async (req, res, url) => {
       await post$
         .evaluate(($post) => {
           $post
-            .querySelector('[data-testid="tag-link"] + a[role="button"]')
+            .querySelector<HTMLElement>(
+              '[data-testid="tag-link"] + a[role="button"]',
+            )
             ?.click();
         })
         .catch((e) => {
@@ -837,7 +820,9 @@ const handleTumblrPost = async (req, res, url) => {
           .evaluate(($footer) => {
             $footer.firstChild?.remove();
 
-            const $pa = $footer.querySelector('[aria-label="Post Activity"]');
+            const $pa = $footer.querySelector<HTMLElement>(
+              '[aria-label="Post Activity"]',
+            );
             if ($pa) {
               $pa.style.height = "auto";
 
@@ -851,12 +836,14 @@ const handleTumblrPost = async (req, res, url) => {
 
               $pa.querySelector('[data-testid="notes-root"]')?.remove();
 
-              const $repliesTab = $pa.querySelector(
+              const $repliesTab = $pa.querySelector<HTMLElement>(
                 '[role="tab"][title="Replies"]',
               );
-              const $tabItem = $pa.querySelector('[role="tab"] + [role="tab"]');
+              const $tabItem = $pa.querySelector<HTMLElement>(
+                '[role="tab"] + [role="tab"]',
+              );
               if ($tabItem && $repliesTab) {
-                $repliesTab.classList = $tabItem.classList;
+                $repliesTab.className = $tabItem.className;
               }
             }
           })
@@ -916,13 +903,7 @@ const handleTumblrPost = async (req, res, url) => {
   return res.end(buffer);
 };
 
-/**
- *
- * @param {AppRequest} req
- * @param {AppResponse} res
- * @param {URL} url
- */
-const handleMisskeyPost = async (req, res, url) => {
+const handleMisskeyPost: RequestHandler = async (req, res, url) => {
   logger.debug("Misskey post", url.toString());
 
   const urlPath = url.pathname.replace(/\/$/, "");
@@ -947,10 +928,7 @@ const handleMisskeyPost = async (req, res, url) => {
     }
 
     const container$ = await post$.evaluateHandle(($post) => {
-      /**
-       * @type {HTMLElement}
-       */
-      const $parent = $post.parentElement;
+      const $parent = $post.parentElement as HTMLElement;
       return $parent;
     });
 
@@ -973,8 +951,8 @@ const handleMisskeyPost = async (req, res, url) => {
         while (nextElement) {
           let elementToRemove = nextElement;
           nextElement = nextElement.nextSibling; // Move to the next sibling
-          if (elementToRemove.name) {
-            elementToRemove.parentNode.removeChild(elementToRemove); // Remove the current sibling
+          if (elementToRemove) {
+            elementToRemove.parentNode?.removeChild(elementToRemove); // Remove the current sibling
           }
         }
       });
@@ -987,7 +965,7 @@ const handleMisskeyPost = async (req, res, url) => {
         while (nextElement) {
           let elementToRemove = nextElement;
           nextElement = nextElement.nextSibling; // Move to the next sibling
-          elementToRemove.parentNode.removeChild(elementToRemove); // Remove the current sibling
+          elementToRemove.parentNode?.removeChild(elementToRemove); // Remove the current sibling
         }
       });
     }
@@ -995,15 +973,15 @@ const handleMisskeyPost = async (req, res, url) => {
     // Remove pure post actions and add style to footer
     {
       await container$.evaluate(($container) => {
-        const $footers = $container.querySelectorAll("footer");
+        const $footers = $container?.querySelectorAll("footer") ?? [];
         for (const $footer of $footers) {
           let nextElement =
-            $footer.parentElement.querySelector("footer > button")?.nextSibling
+            $footer.parentElement?.querySelector("footer > button")?.nextSibling
               ?.nextSibling;
           while (nextElement) {
             let elementToRemove = nextElement;
             nextElement = nextElement.nextSibling; // Move to the next sibling
-            elementToRemove.parentNode.removeChild(elementToRemove); // Remove the current sibling
+            elementToRemove.parentNode?.removeChild(elementToRemove); // Remove the current sibling
           }
 
           $footer.style.justifyContent = "flex-start";
@@ -1014,10 +992,12 @@ const handleMisskeyPost = async (req, res, url) => {
     // Open all summaries
     {
       await container$.evaluate(($container) => {
-        $container.querySelectorAll("details > summary").forEach(($summary) => {
-          $summary.click();
-          $summary.style.display = "none";
-        });
+        $container
+          .querySelectorAll<HTMLElement>("details > summary")
+          .forEach(($summary) => {
+            $summary.click();
+            $summary.style.display = "none";
+          });
       });
 
       await page.waitForLoadState("networkidle");
@@ -1045,10 +1025,7 @@ const handleMisskeyPost = async (req, res, url) => {
   return res.end(buffer);
 };
 
-/**
- * @param {URL} url
- */
-const getNodeInfo = async (url) => {
+const getNodeInfo = async (url: URL) => {
   const nodeInfoListValidator = z.object({
     links: z.array(
       z.object({
@@ -1110,13 +1087,7 @@ const getNodeInfo = async (url) => {
   return nodeInfo;
 };
 
-/**
- *
- * @param {AppRequest} req
- * @param {AppResponse} res
- * @param {URL} url
- */
-const handleActivityPub = async (req, res, url) => {
+const handleActivityPub: RequestHandler = async (req, res, url) => {
   const instanceHandlers = {
     mastodon: () => handleMastodonToot(req, res, url),
     misskey: () => handleMisskeyPost(req, res, url),
@@ -1146,9 +1117,13 @@ const handleActivityPub = async (req, res, url) => {
       .end();
   }
 
-  const softwareName = nodeInfo.software.name;
+  const softwareName = nodeInfo.software.name as
+    | keyof typeof instanceHandlers
+    | (string & {});
+
   logger.debug("Getting", softwareName, "instance handler");
-  const handler = instanceHandlers[softwareName];
+  const handler =
+    instanceHandlers[softwareName as keyof typeof instanceHandlers];
 
   if (!handler) {
     return res
@@ -1172,16 +1147,15 @@ app.get(
   "/*",
   speedLimiter,
   asyncReq(async (req, res) => {
-    /**
-     * @type {URL | null}
-     */
-    let parsedUrl = null;
+    let parsedUrl = null as URL | null;
     {
       const twitterUrl = req.params[0];
       try {
         logger.debug("Starting processing", twitterUrl);
 
-        parsedUrl = new URL(twitterUrl);
+        if (twitterUrl) {
+          parsedUrl = new URL(twitterUrl);
+        }
       } catch (e) {
         logger.debug("URL parse failed", twitterUrl, e);
       }

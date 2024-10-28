@@ -4,6 +4,8 @@ docker-compose.override.yml
 docker-compose.override.example.yml
 .dockerignore
 
+/dist/
+
 .env
 
 .git
