@@ -24,7 +24,7 @@ import faviconPath from "./assets/favicon.ico";
 
 const EMBED_HTML = await Bun.file(embedHtmlPath).text();
 const INDEX_HTML = await Bun.file(indexHtmlPath).text();
-const FAVICON_BLOB = await Bun.file(faviconPath).arrayBuffer();
+const FAVICON_BLOB = await Bun.file(faviconPath).bytes();
 
 const BrowserInfo = BrowserDevices["Desktop Chrome"];
 
