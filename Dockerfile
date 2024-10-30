@@ -27,5 +27,4 @@ COPY --from=build /app/dist/server ./
 RUN npx playwright install-deps
 # Install browsers for playwright
 RUN npx playwright install --force chromium
-COPY *.html favicon.ico ./
 CMD ["./server"]

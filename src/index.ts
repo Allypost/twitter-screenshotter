@@ -5,7 +5,6 @@ import {
   type Browser,
   type BrowserContext,
 } from "playwright";
-import fs from "fs";
 import https from "node:https";
 import express from "express";
 import { urlencoded as bodyParserUrlencoded } from "body-parser";
@@ -19,6 +18,13 @@ import type { Request, Response } from "express";
 import { createClient } from "redis";
 import { Agent, type AtpSessionData, CredentialSession } from "@atproto/api";
 import { type PostView } from "@atproto/api/dist/client/types/app/bsky/feed/defs";
+import indexHtmlPath from "./assets/index.html";
+import embedHtmlPath from "./assets/embed.html";
+import faviconPath from "./assets/favicon.ico";
+
+const EMBED_HTML = await Bun.file(embedHtmlPath).text();
+const INDEX_HTML = await Bun.file(indexHtmlPath).text();
+const FAVICON_BLOB = await Bun.file(faviconPath).arrayBuffer();
 
 const BrowserInfo = BrowserDevices["Desktop Chrome"];
 
@@ -58,8 +64,6 @@ const SCREENSHOT_CONFIG = (() => {
     }
   }
 })();
-
-const EMBED_HTML = fs.readFileSync("./embed.html", "utf-8");
 
 class Logger {
   private logInstance = console.log;
@@ -1384,14 +1388,12 @@ async function main() {
 
   const speedLimiter = slowDown(slowDownOptions);
 
-  const indexFile = fs.readFileSync("./index.html");
   app.get("/", (_req, res) => {
-    res.set("Content-Type", "text/html; charset=utf-8").end(indexFile);
+    res.set("Content-Type", "text/html; charset=utf-8").end(INDEX_HTML);
   });
 
-  const faviconFile = fs.readFileSync("./favicon.ico");
   app.get("/favicon.ico", (_req, res) => {
-    res.end(faviconFile);
+    res.end(FAVICON_BLOB);
   });
 
   app.post("/", (req, res) => {
