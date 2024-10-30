@@ -48,12 +48,12 @@ let BSKY_SESSION_DATA: string | null = null;
 
 const SCREENSHOT_CONFIG = (() => {
   switch (BrowserInstance.name()) {
-    case "chromium": {
-      return {
-        omitBackground: true,
-        type: "png",
-      } as const;
-    }
+    // case "chromium": {
+    //   return {
+    //     omitBackground: true,
+    //     type: "png",
+    //   } as const;
+    // }
 
     default: {
       return {
