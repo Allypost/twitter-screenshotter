@@ -39,8 +39,8 @@ const SEND_CACHE_HEADER_FOR_SECONDS = 15 * 60; // 15 minutes
 const IS_DEV = process.env.NODE_ENV !== "production";
 
 const BROWSER_INFO = {
-  width: 768,
-  height: 1024,
+  width: 1152,
+  height: 1536,
 };
 
 let BSKY_AGENT: Agent;
