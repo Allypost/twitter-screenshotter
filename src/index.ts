@@ -681,8 +681,10 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
     logger.debug("Start rendering Tumblr page", url.toString());
     const page = await context.newPage();
 
+    logger.debug("Navigate to Tumblr post", url.toString());
     await page.goto(url.toString());
 
+    logger.debug("Wait for page to fully load");
     await page.waitForLoadState("networkidle");
 
     const post$ = await page
@@ -695,22 +697,11 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
       logger.debug("Post not found");
       return null;
     }
-
-    // Remove the global tumblr header
-    {
-      await page
-        .evaluate(() => {
-          document
-            .querySelector("#base-container header")
-            ?.parentElement?.remove();
-        })
-        .catch((e) => {
-          logger.debug("Remove header error", e);
-        });
-    }
+    logger.debug("Got post");
 
     // Remove three dots and "follow" from post header
     {
+      logger.debug("Remove three dots and follow from post header");
       const header$ = await post$.$('header[role="banner"]').catch(() => null);
 
       if (header$) {
@@ -727,6 +718,7 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
 
     // Prevent margin collapse on post (should restore bottom "padding")
     {
+      logger.debug("Prevent margin collapse on post");
       await post$
         .evaluate(($post) => {
           $post.style.paddingBottom = "1px";
@@ -738,6 +730,7 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
 
     // Remove alt text thing
     {
+      logger.debug("Remove alt text thing");
       await post$
         .evaluate(() => {
           document
@@ -751,6 +744,7 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
 
     // Expand tags
     {
+      logger.debug("Expand tags");
       await post$
         .evaluate(($post) => {
           $post
@@ -766,6 +760,7 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
 
     // Clean up notes/footer section
     {
+      logger.debug("Clean up notes/footer section");
       const footer$ = await post$
         .$('footer[role="contentinfo"]')
         .catch(() => null);
@@ -810,6 +805,7 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
 
     // Remove screen overlay
     {
+      logger.debug("Remove screen overlay");
       await page
         .evaluate(() => {
           document.querySelector(".components-modal__screen-overlay")?.remove();
@@ -832,6 +828,7 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
         });
     }
 
+    logger.debug("Screenshot post");
     return post$.screenshot(SCREENSHOT_CONFIG);
   })(context, url).catch((e) => {
     logger.debug("Failed to screenshot post", e);
@@ -841,6 +838,8 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
   if (!buffer) {
     return res.sendStatus(StatusCodes.NOT_FOUND);
   }
+
+  logger.debug("Sending response");
 
   res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
   res.setHeader("Content-Length", buffer.length);
