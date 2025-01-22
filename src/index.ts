@@ -1262,10 +1262,14 @@ async function main() {
           accPassword,
         });
 
-        await bskyCredentialStore.login({
-          identifier: accIdentifier,
-          password: accPassword,
-        });
+        await bskyCredentialStore
+          .login({
+            identifier: accIdentifier,
+            password: accPassword,
+          })
+          .catch((e) => {
+            console.error("Error logging into bsky", e);
+          });
       } else if (refreshJwt) {
         logger.debug("Using BSKY credentials", {
           refreshJwt,
