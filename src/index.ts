@@ -263,6 +263,40 @@ const renderTweetPage: Renderer = async (context, url) => {
   {
     await tweet$.evaluate(($tweet) => {
       $tweet.style.borderRadius = "12px";
+      $tweet.style.marginBottom = "2px";
+    });
+  }
+
+  // // Remove "Read $NUM replies" thing
+  {
+    await tweet$.evaluate(($tweet) => {
+      $tweet
+        .querySelector('[data-testid="logged_out_read_replies_pivot"]')
+        ?.remove();
+    });
+  }
+
+  // Remove share button
+  {
+    await tweet$.evaluate(($tweet) => {
+      const $shareBtn = $tweet.querySelector('[aria-label="Share post"]')
+        ?.parentElement?.parentElement;
+      const $siblings = $shareBtn?.parentElement?.children;
+
+      $shareBtn?.remove();
+
+      if (!$siblings) {
+        return;
+      }
+
+      for (let i = 0; i < $siblings.length; i++) {
+        const $sibling = $siblings.item(i) as HTMLElement;
+        if (!$sibling) {
+          continue;
+        }
+
+        $sibling.style.justifyContent = "center";
+      }
     });
   }
 
@@ -1438,7 +1472,7 @@ async function main() {
         case "x.com":
         case "www.x.com":
         case "www.twitter.com": {
-          parsedUrl.hostname = "twitter.com";
+          parsedUrl.hostname = "x.com";
           parsedUrl.protocol = "https:";
 
           return handleTwitterTweet(req, res, parsedUrl);
