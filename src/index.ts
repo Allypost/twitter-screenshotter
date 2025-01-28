@@ -10,7 +10,11 @@ import express from "express";
 import { urlencoded as bodyParserUrlencoded } from "body-parser";
 import { StatusCodes } from "http-status-codes";
 import morgan from "morgan";
-import { slowDown, type Options as SlowDownOptions } from "express-slow-down";
+import {
+  slowDown,
+  type SlowDownInfo,
+  type Options as SlowDownOptions,
+} from "express-slow-down";
 import { RedisStore } from "rate-limit-redis";
 import axios from "axios";
 import { z } from "zod";
@@ -30,6 +34,19 @@ const BrowserInfo = BrowserDevices["Desktop Chrome"];
 
 const HOST = process.env.HOST || "localhost";
 const PORT = Number(process.env.PORT || 8080);
+const LOG_LEVELS = ["trace", "debug", "info", "warn", "error"] as const;
+const LOG_LEVELS_RANK = Object.fromEntries(
+  LOG_LEVELS.map((level, i) => [level, i]),
+) as Record<LogLevel, number>;
+type LogLevel = (typeof LOG_LEVELS)[number];
+const LOG_LEVEL = (process.env.LOG_LEVEL || "info") as LogLevel;
+const LOG_LEVEL_REQUIRED_RANK = LOG_LEVELS_RANK[LOG_LEVEL];
+
+if (!LOG_LEVELS.includes(LOG_LEVEL)) {
+  console.warn("Invalid LOG_LEVEL", LOG_LEVEL);
+  console.warn("Allowed LOG_LEVELS: ", LOG_LEVELS);
+  process.exit(1);
+}
 
 const REQUESTS_PER_SECOND = 1;
 const REQUESTS_MEASURE_WINDOW_SECONDS = 1 * 60; // 1 minute
@@ -65,40 +82,100 @@ const SCREENSHOT_CONFIG = (() => {
   }
 })();
 
+type LoggerTag = Record<string, string | null>;
 class Logger {
   private logInstance = console.log;
+  private tags: Record<string, string | null> = {};
+  private tagsStr = "";
 
   setLogger(log: (...args: any[]) => any) {
     this.logInstance = log;
+    return this;
   }
 
-  #log(...args: any[]) {
+  #log(level: LogLevel, ...args: any[]) {
+    const levelRank = LOG_LEVELS_RANK[level];
+    if (levelRank < LOG_LEVEL_REQUIRED_RANK) {
+      return;
+    }
+
     this.logInstance(
       `[${new Date().toISOString()}]`,
+      `[${level}]`,
+      this.tagsStr,
       ...args.map((arg) => arg),
     );
   }
 
-  debug(...args: any[]) {
-    if (!IS_DEV) {
-      return;
+  setTags(tags: LoggerTag | string) {
+    if (typeof tags === "string") {
+      tags = {
+        [tags]: null,
+      };
     }
 
-    this.#log("[DEBUG]", ...args);
+    this.tags = { ...this.tags, ...tags };
+    this.tagsStr = Object.entries(this.tags)
+      .map(([key, value]) =>
+        value !== null ? `[${key}=${JSON.stringify(value)}]` : `[${key}]`,
+      )
+      .join(" ");
+    return this;
+  }
+
+  clearTags(...tags: (keyof LoggerTag)[]) {
+    for (const tag of tags) {
+      delete this.tags[tag];
+    }
+  }
+
+  subTagged(tags: LoggerTag | string) {
+    if (typeof tags === "string") {
+      tags = {
+        [tags]: null,
+      };
+    }
+
+    return new Logger()
+      .setLogger(this.logInstance)
+      .setTags({ ...this.tags, ...tags });
+  }
+
+  getTags() {
+    return { ...this.tags };
+  }
+
+  trace(...args: any[]) {
+    this.#log("trace", ...args);
+  }
+
+  debug(...args: any[]) {
+    this.#log("debug", ...args);
+  }
+
+  info(...args: any[]) {
+    this.#log("info", ...args);
   }
 
   warn(...args: any[]) {
-    this.#log("[WARN]", ...args);
+    this.#log("warn", ...args);
+  }
+
+  error(...args: any[]) {
+    this.#log("error", ...args);
   }
 }
 
-const logger = new Logger();
+const globalLogger = new Logger();
 
 let BROWSER: Browser;
 
 type AppRequest = Request & {
   $browserContext: BrowserContext | null | undefined;
   $seenUrls: string[] | undefined;
+  $logger: Logger;
+  $id: string;
+  slowDown?: SlowDownInfo;
 };
 
 type AppResponse = Response;
@@ -128,9 +205,12 @@ const newBrowserContext = (options?: BrowserContextOptions) => {
 type AppHandler = (req: AppRequest, res: AppResponse) => any;
 
 const asyncReq =
-  (handler: AppHandler) => async (rreq: Request, rres: Response) => {
+  (handler: AppHandler, onFinished?: AppHandler) =>
+  async (rreq: Request, rres: Response) => {
     const req = rreq as AppRequest;
     const res = rres as AppResponse;
+
+    const logger = req.$logger;
 
     try {
       await handler(req, res);
@@ -138,6 +218,10 @@ const asyncReq =
       logger.warn("Handler failed", e);
 
       res.sendStatus(StatusCodes.INTERNAL_SERVER_ERROR);
+    } finally {
+      try {
+        onFinished?.(req, res);
+      } catch {}
     }
 
     try {
@@ -152,9 +236,10 @@ const asyncReq =
 type Renderer = (
   context: BrowserContext,
   url: URL,
+  logger: Logger,
 ) => Promise<Buffer | null | undefined>;
 
-const renderTweetPage: Renderer = async (context, url) => {
+const renderTweetPage: Renderer = async (context, url, logger) => {
   logger.debug("Start rendering twitter page", url.toString());
   const page = await context.newPage();
 
@@ -311,7 +396,7 @@ const renderTweetPage: Renderer = async (context, url) => {
   return tweet$.screenshot(SCREENSHOT_CONFIG);
 };
 
-const renderTweetEmbedded: Renderer = async (context, url) => {
+const renderTweetEmbedded: Renderer = async (context, url, logger) => {
   logger.debug("Start rendering embedded page", url.toString());
 
   const page = await context.newPage();
@@ -457,18 +542,20 @@ const renderTweetEmbedded: Renderer = async (context, url) => {
   return tweet.screenshot(SCREENSHOT_CONFIG);
 };
 
-const renderTweet: Renderer = (context, url) =>
-  renderTweetPage(context, url).then(
-    (data) => data || renderTweetEmbedded(context, url),
+const renderTweet: Renderer = (context, url, logger) =>
+  renderTweetPage(context, url, logger).then(
+    (data) => data || renderTweetEmbedded(context, url, logger),
   );
 
 type RequestHandler = (req: AppRequest, res: AppResponse, url: URL) => unknown;
 
 const handleMastodonToot: RequestHandler = async (req, res, url) => {
-  logger.debug("Toot URL", url.toString());
-
   const urlPath = url.pathname.replace(/\/$/, "");
   const tootId = urlPath.split("/").pop() ?? "";
+
+  const logger = req.$logger.subTagged({ mastodon: tootId });
+
+  logger.debug("Toot URL", url.toString());
 
   if (!/^\d+$/.test(tootId)) {
     logger.debug("Invalid toot ID", tootId);
@@ -629,6 +716,7 @@ const handleMastodonToot: RequestHandler = async (req, res, url) => {
 };
 
 const handleTwitterTweet: RequestHandler = async (req, res, url) => {
+  const logger = req.$logger.subTagged("twitter");
   const tweetUrlMatch = url.pathname.match(/^\/\w{4,15}\/status\/(?<id>\d+)$/);
   if (!tweetUrlMatch) {
     logger.debug("Invalid tweet URL", url.toString());
@@ -636,6 +724,7 @@ const handleTwitterTweet: RequestHandler = async (req, res, url) => {
   }
 
   const tweetId = tweetUrlMatch.groups!.id!;
+  logger.setTags({ twitter: tweetId });
   logger.debug("Tweet ID", tweetId);
   {
     /**
@@ -686,7 +775,7 @@ const handleTwitterTweet: RequestHandler = async (req, res, url) => {
   const context = await newBrowserContext();
   req.$browserContext = context;
 
-  const buffer = await renderTweet(context, url);
+  const buffer = await renderTweet(context, url, logger);
 
   if (!buffer) {
     return res
@@ -710,6 +799,12 @@ const handleTwitterTweet: RequestHandler = async (req, res, url) => {
 };
 
 const handleTumblrPost: RequestHandler = async (req, res, url) => {
+  const logger = req.$logger.subTagged("tumblr");
+  {
+    // /post/<user>/<post-id>(/<post-slug>)
+    const [_constPostStr, postUser, postId] = url.pathname.split("/");
+    logger.setTags({ tumblr: `${postId}@${postUser}` });
+  }
   logger.debug("Tumblr URL", url.toString());
 
   const context = await newBrowserContext();
@@ -896,10 +991,11 @@ const handleTumblrPost: RequestHandler = async (req, res, url) => {
 };
 
 const handleMisskeyPost: RequestHandler = async (req, res, url) => {
-  logger.debug("Misskey post", url.toString());
-
   const urlPath = url.pathname.replace(/\/$/, "");
   const postId = urlPath.split("/").pop() ?? "";
+
+  const logger = req.$logger.subTagged({ misskey: postId });
+  logger.debug("Misskey post", url.toString());
 
   const context = await newBrowserContext();
   req.$browserContext = context;
@@ -1017,7 +1113,7 @@ const handleMisskeyPost: RequestHandler = async (req, res, url) => {
   return res.end(buffer);
 };
 
-const getNodeInfo = async (url: URL) => {
+const getNodeInfo = async (url: URL, logger: Logger) => {
   const nodeInfoListValidator = z.object({
     links: z.array(
       z.object({
@@ -1080,6 +1176,8 @@ const getNodeInfo = async (url: URL) => {
 };
 
 const handleActivityPub: RequestHandler = async (req, res, url) => {
+  const logger = req.$logger.subTagged("activity-pub");
+
   const instanceHandlers = {
     mastodon: () => handleMastodonToot(req, res, url),
     misskey: () => handleMisskeyPost(req, res, url),
@@ -1101,7 +1199,7 @@ const handleActivityPub: RequestHandler = async (req, res, url) => {
       .end();
   }
 
-  const nodeInfo = await getNodeInfo(url);
+  const nodeInfo = await getNodeInfo(url, logger);
   if (!nodeInfo) {
     return res
       .status(StatusCodes.NOT_FOUND)
@@ -1136,6 +1234,7 @@ const BLOCKED_BSKY_URLS = [
   "https://statsigapi.net/v1/sdk_exception",
 ];
 const handleBskyPost: RequestHandler = async (req, res, url) => {
+  const logger = req.$logger.subTagged("bsky");
   logger.debug("BlueSky post URL", url.toString());
 
   const matcher =
@@ -1156,7 +1255,12 @@ const handleBskyPost: RequestHandler = async (req, res, url) => {
       .end();
   }
 
-  logger.debug("Got BlueSky post request", { username, postId });
+  logger.setTags({ bsky: `${postId}@${username}` });
+
+  logger.debug(
+    "Got BlueSky post request",
+    JSON.stringify({ username, postId }),
+  );
 
   const info = await BSKY_AGENT.app.bsky.feed
     .getPostThread({
@@ -1337,7 +1441,7 @@ const handleBskyPost: RequestHandler = async (req, res, url) => {
     "Content-Disposition",
     `inline; filename="bluesky-post.${username.replaceAll(
       ".",
-      "-",
+      "_",
     )}.${postId}.${SCREENSHOT_CONFIG.type}"`,
   );
 
@@ -1363,7 +1467,8 @@ async function main() {
       const accPassword = process.env.BSKY_ACCOUNT_PASSWORD;
 
       if (accIdentifier && accPassword) {
-        logger.debug("Using BSKY credentials", {
+        globalLogger.info("Logging into BSKY using credentials");
+        globalLogger.debug("Using BSKY credentials", {
           accIdentifier,
           accPassword,
         });
@@ -1377,7 +1482,8 @@ async function main() {
             console.error("Error logging into bsky", e);
           });
       } else if (refreshJwt) {
-        logger.debug("Using BSKY credentials", {
+        globalLogger.info("Logging into BSKY using refresh token");
+        globalLogger.debug("Using BSKY credentials", {
           refreshJwt,
         });
 
@@ -1392,7 +1498,7 @@ async function main() {
       const session = bskyCredentialStore.session;
 
       if (session) {
-        logger.debug("Successfully logged in to BSKY", {
+        globalLogger.info("Successfully logged in to BSKY", {
           email: session.email,
           handle: session.handle,
           status: session.status,
@@ -1453,7 +1559,7 @@ async function main() {
 
         setInterval(
           async () => {
-            logger.debug("Refreshing BSKY credentials");
+            globalLogger.info("Refreshing BSKY credentials");
             await bskyCredentialStore.refreshSession();
             updateBskySessionData();
           },
@@ -1467,6 +1573,17 @@ async function main() {
 
   app.disable("x-powered-by");
   app.set("trust proxy", Number(process.env.TRUST_PROXY ?? "2"));
+
+  app.use((rawReq, res, next) => {
+    const req = rawReq as AppRequest;
+
+    req.$id = `${Date.now().toString(36)}${Math.random().toString(36)}`;
+    req.$logger = globalLogger.subTagged({
+      $id: req.$id,
+    });
+    res.setHeader("x-twitshot-request-id", req.$id);
+    next();
+  });
 
   app.use(morgan("combined"));
 
@@ -1486,11 +1603,12 @@ async function main() {
     process.env.REDIS_URL &&
     String(process.env.REDIS_URL).trim().length > 0
   ) {
-    console.log("|>", process.env.REDIS_URL);
+    globalLogger.debug("Connecting to redis at", process.env.REDIS_URL);
     const client = createClient({
       url: process.env.REDIS_URL,
     });
     await client.connect();
+    globalLogger.info("Connected to redis at", process.env.REDIS_URL);
     slowDownOptions.store = new RedisStore({
       sendCommand: (...args) => client.sendCommand(args),
     });
@@ -1521,78 +1639,98 @@ async function main() {
   app.get(
     "/*",
     speedLimiter,
-    asyncReq(async (req, res) => {
-      let parsedUrl = null as URL | null;
-      {
-        const twitterUrl = req.params[0];
-        try {
-          logger.debug("Starting processing", twitterUrl);
-
-          if (twitterUrl) {
-            parsedUrl = new URL(twitterUrl);
+    (rreq, _res, next) => {
+      const req = rreq as AppRequest;
+      req.$logger.info("Got request to render", req.params[0]);
+      return next();
+    },
+    asyncReq(
+      async (req, res) => {
+        if (req.slowDown) {
+          res.setHeader("x-ratelimit-limit", req.slowDown.limit.toString());
+          res.setHeader("x-ratelimit-used", req.slowDown.used.toString());
+          if (req.slowDown.resetTime) {
+            res.setHeader(
+              "x-ratelimit-reset",
+              req.slowDown.resetTime.toISOString(),
+            );
           }
-        } catch (e) {
-          logger.debug("URL parse failed", twitterUrl, e);
-        }
-      }
-
-      if (!parsedUrl) {
-        return res.sendStatus(StatusCodes.BAD_REQUEST);
-      }
-
-      switch (parsedUrl.hostname) {
-        case "twitter.com":
-        case "x.com":
-        case "www.x.com":
-        case "www.twitter.com": {
-          parsedUrl.hostname = "x.com";
-          parsedUrl.protocol = "https:";
-
-          return handleTwitterTweet(req, res, parsedUrl);
         }
 
-        case "tumblr.com":
-        case "www.tumblr.com": {
-          parsedUrl.hostname = "www.tumblr.com";
-          parsedUrl.protocol = "https:";
+        let parsedUrl = null as URL | null;
+        {
+          const twitterUrl = req.params[0];
+          try {
+            req.$logger.debug("Starting processing", twitterUrl);
 
-          return handleTumblrPost(req, res, parsedUrl);
+            if (twitterUrl) {
+              parsedUrl = new URL(twitterUrl);
+            }
+          } catch (e) {
+            req.$logger.debug("URL parse failed", twitterUrl, e);
+          }
         }
 
-        case "bsky.app": {
-          parsedUrl.hostname = "bsky.app";
-          parsedUrl.protocol = "https:";
-
-          return handleBskyPost(req, res, parsedUrl);
+        if (!parsedUrl) {
+          return res.sendStatus(StatusCodes.BAD_REQUEST);
         }
 
-        default: {
-          const tumblrSubdomainPost = parsedUrl
-            .toString()
-            .match(
-              /^https?:\/\/(?<subdomain>[^\-][a-zA-Z0-9\-]{0,30}[^\-])\.tumblr\.com\/post\/(?<postId>[\d]+)(?:\/(?<postSlug>[^\/]+))?/i,
-            )?.groups;
-          if (tumblrSubdomainPost) {
+        switch (parsedUrl.hostname) {
+          case "twitter.com":
+          case "x.com":
+          case "www.x.com":
+          case "www.twitter.com": {
+            parsedUrl.hostname = "x.com";
+            parsedUrl.protocol = "https:";
+
+            return handleTwitterTweet(req, res, parsedUrl);
+          }
+
+          case "tumblr.com":
+          case "www.tumblr.com": {
             parsedUrl.hostname = "www.tumblr.com";
             parsedUrl.protocol = "https:";
-            parsedUrl.pathname = `/${tumblrSubdomainPost.subdomain}/${tumblrSubdomainPost.postId}`;
-            if (tumblrSubdomainPost.postSlug) {
-              parsedUrl.pathname += `/${tumblrSubdomainPost.postSlug}`;
-            }
 
             return handleTumblrPost(req, res, parsedUrl);
           }
 
-          return handleActivityPub(req, res, parsedUrl);
+          case "bsky.app": {
+            parsedUrl.hostname = "bsky.app";
+            parsedUrl.protocol = "https:";
+
+            return handleBskyPost(req, res, parsedUrl);
+          }
+
+          default: {
+            const tumblrSubdomainPost = parsedUrl
+              .toString()
+              .match(
+                /^https?:\/\/(?<subdomain>[^\-][a-zA-Z0-9\-]{0,30}[^\-])\.tumblr\.com\/post\/(?<postId>[\d]+)(?:\/(?<postSlug>[^\/]+))?/i,
+              )?.groups;
+            if (tumblrSubdomainPost) {
+              parsedUrl.hostname = "www.tumblr.com";
+              parsedUrl.protocol = "https:";
+              parsedUrl.pathname = `/${tumblrSubdomainPost.subdomain}/${tumblrSubdomainPost.postId}`;
+              if (tumblrSubdomainPost.postSlug) {
+                parsedUrl.pathname += `/${tumblrSubdomainPost.postSlug}`;
+              }
+
+              return handleTumblrPost(req, res, parsedUrl);
+            }
+
+            return handleActivityPub(req, res, parsedUrl);
+          }
         }
-      }
-    }),
+      },
+      (req) => {
+        req.$logger.info("Done with rendering", req.params[0]);
+      },
+    ),
   );
 
   app.listen(PORT, HOST, () => {
-    // Cache thing: 1
-    console.error("|> Environment:", JSON.stringify(process.env));
-    console.error(`|> Listening on http://${HOST}:${PORT}`);
+    globalLogger.info("Environment:", JSON.stringify(process.env));
+    globalLogger.info(`Listening on http://${HOST}:${PORT}`);
   });
 }
 
