@@ -1,5 +1,5 @@
 import {
-  chromium as BrowserInstance,
+  firefox as BrowserInstance,
   devices as BrowserDevices,
   type BrowserContextOptions,
   type Browser,
