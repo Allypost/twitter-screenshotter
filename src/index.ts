@@ -1370,6 +1370,9 @@ const handleBskyPost: RequestHandler = async (req, res, url) => {
       return null;
     }
 
+    logger.debug("Waiting for page to finish loading assets");
+    await page.waitForLoadState("networkidle");
+
     // Remove post actions (eg. Like, Retweet, Reply, etc.)
     {
       await post$.evaluate(($el) => {
@@ -1416,9 +1419,6 @@ const handleBskyPost: RequestHandler = async (req, res, url) => {
         }
       });
     }
-
-    logger.debug("Waiting for page to finish loading assets");
-    await page.waitForLoadState("networkidle");
 
     logger.debug("Taking screenshot...");
     return post$.screenshot(SCREENSHOT_CONFIG);
