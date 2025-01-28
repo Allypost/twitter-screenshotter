@@ -1232,6 +1232,7 @@ const handleActivityPub: RequestHandler = async (req, res, url) => {
 const BLOCKED_BSKY_URLS = [
   "https://events.bsky.app/v2/rgstr",
   "https://statsigapi.net/v1/sdk_exception",
+  "https://events.bsky.app/v2/initialize",
 ];
 const handleBskyPost: RequestHandler = async (req, res, url) => {
   const logger = req.$logger.subTagged("bsky");
@@ -1416,8 +1417,10 @@ const handleBskyPost: RequestHandler = async (req, res, url) => {
       });
     }
 
-    logger.debug("Taking screenshot...");
+    logger.debug("Waiting for page to finish loading assets");
+    await page.waitForLoadState("networkidle");
 
+    logger.debug("Taking screenshot...");
     return post$.screenshot(SCREENSHOT_CONFIG);
   })(context, url).catch((e) => {
     logger.debug("Error taking screenshot", e);
