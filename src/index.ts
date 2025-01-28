@@ -118,6 +118,10 @@ const newBrowserContext = (options?: BrowserContextOptions) => {
     colorScheme: "dark",
     // reducedMotion: "reduce",
     ...options,
+  }).then((ctx) => {
+    ctx.setDefaultNavigationTimeout(35_000);
+
+    return ctx;
   });
 };
 
