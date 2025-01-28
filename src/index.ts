@@ -1131,6 +1131,10 @@ const handleActivityPub: RequestHandler = async (req, res, url) => {
   return handler();
 };
 
+const BLOCKED_BSKY_URLS = [
+  "https://events.bsky.app/v2/rgstr",
+  "https://statsigapi.net/v1/sdk_exception",
+];
 const handleBskyPost: RequestHandler = async (req, res, url) => {
   logger.debug("BlueSky post URL", url.toString());
 
@@ -1158,7 +1162,10 @@ const handleBskyPost: RequestHandler = async (req, res, url) => {
     .getPostThread({
       uri: `at://${username}/app.bsky.feed.post/${postId}`,
     })
-    .catch(() => null);
+    .catch((e) => {
+      logger.debug("Error getting post", e);
+      return null;
+    });
 
   if (!info || !info.data) {
     return res
@@ -1176,28 +1183,82 @@ const handleBskyPost: RequestHandler = async (req, res, url) => {
       .end();
   }
 
-  const context = await newBrowserContext();
+  const context = await newBrowserContext({
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: url.origin,
+          localStorage: [
+            BSKY_SESSION_DATA
+              ? {
+                  name: "BSKY_STORAGE",
+                  value: BSKY_SESSION_DATA,
+                }
+              : undefined,
+          ].filter(Boolean),
+        },
+      ],
+    },
+  });
   req.$browserContext = context;
 
   const buffer = await (async (context, url) => {
     logger.debug("Start rendering Bluesky page", url.toString());
     const page = await context.newPage();
 
+    await page.route("**/*", (route) => {
+      const url = route.request().url();
+
+      if (BLOCKED_BSKY_URLS.includes(url)) {
+        return route.abort("blockedbyclient");
+      }
+
+      return route.continue();
+    });
+
     await page.goto(url.toString());
 
     if (BSKY_SESSION_DATA) {
-      await page.evaluate((data) => {
+      logger.debug("Embedding Bluesky session data");
+
+      const shouldReload = await page.evaluate((data) => {
+        const PARSED_BSKY_SESSION_DATA = JSON.parse(data);
+        // @ts-ignore
+        const newDid = PARSED_BSKY_SESSION_DATA?.session?.currentAccount?.did;
+
+        let prevData = null;
+        try {
+          prevData = JSON.parse(
+            window.localStorage.getItem("BSKY_STORAGE") ?? "{}",
+          );
+        } catch (_e) {}
+        // @ts-ignore
+        const prevDid = prevData?.session?.currentAccount?.did;
+
+        if (prevDid === newDid) {
+          return false;
+        }
+
         window.localStorage.setItem("BSKY_STORAGE", data);
+        return true;
       }, BSKY_SESSION_DATA);
 
-      await page.reload();
+      if (shouldReload) {
+        logger.debug("Bluesky data updated. Reloading page...");
+        await page.reload();
+      } else {
+        logger.debug("Bluesky data already up to date.");
+      }
     }
 
-    await page.waitForLoadState("networkidle");
+    const postSelector = `[data-testid="postThreadItem-by-${username}"]`;
 
-    const post$ = await page
-      .$(`[data-testid="postThreadItem-by-${username}"]`)
-      .catch(() => null);
+    logger.debug("Waiting for page to load");
+    await page.waitForSelector(postSelector);
+    logger.debug("Page loaded. Processing post.");
+
+    const post$ = await page.$(postSelector).catch(() => null);
 
     if (!post$) {
       logger.debug("Bluesky post not available");
@@ -1251,8 +1312,15 @@ const handleBskyPost: RequestHandler = async (req, res, url) => {
       });
     }
 
+    logger.debug("Taking screenshot...");
+
     return post$.screenshot(SCREENSHOT_CONFIG);
-  })(context, url).catch(() => null);
+  })(context, url).catch((e) => {
+    logger.debug("Error taking screenshot", e);
+    return null;
+  });
+
+  logger.debug("Screenshot taken", Boolean(buffer));
 
   if (!buffer) {
     return res.sendStatus(StatusCodes.NOT_FOUND);
@@ -1350,6 +1418,7 @@ async function main() {
               refreshJwt: session.refreshJwt,
               service: bskyCredentialStore.serviceUrl.toString(),
               signupQueued: false,
+              isSelfHosted: false,
             };
 
             BSKY_SESSION_DATA = JSON.stringify({
