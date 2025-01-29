@@ -58,6 +58,7 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 const BROWSER_INFO = {
   width: 1152,
   height: 1536,
+  scaleFactor: 2,
 };
 
 let BSKY_AGENT: Agent;
@@ -185,13 +186,14 @@ const newBrowserContext = (options?: BrowserContextOptions) => {
     acceptDownloads: false,
     locale: "en-US",
     viewport: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
+      width: BROWSER_INFO.width * BROWSER_INFO.scaleFactor,
+      height: BROWSER_INFO.height * BROWSER_INFO.scaleFactor,
     },
     screen: {
-      width: BROWSER_INFO.width,
-      height: BROWSER_INFO.height,
+      width: BROWSER_INFO.width * BROWSER_INFO.scaleFactor,
+      height: BROWSER_INFO.height * BROWSER_INFO.scaleFactor,
     },
+    deviceScaleFactor: BROWSER_INFO.scaleFactor,
     colorScheme: "dark",
     // reducedMotion: "reduce",
     ...options,
