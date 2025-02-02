@@ -9,7 +9,6 @@ import https from "node:https";
 import express from "express";
 import { urlencoded as bodyParserUrlencoded } from "body-parser";
 import { StatusCodes } from "http-status-codes";
-import morgan from "morgan";
 import {
   slowDown,
   type SlowDownInfo,
@@ -1607,6 +1606,13 @@ async function main() {
   app.disable("x-powered-by");
   app.set("trust proxy", Number(process.env.TRUST_PROXY ?? "2"));
 
+  const _toReqLogLine = (
+    info: Record<string, string | number | null | undefined>,
+  ) => {
+    return Object.entries(info)
+      .filter(([_k, v]) => v !== null && v !== undefined)
+      .map(([k, v]) => `${k}=${JSON.stringify(v)}`);
+  };
   app.use((rawReq, res, next) => {
     const req = rawReq as AppRequest;
 
@@ -1615,10 +1621,28 @@ async function main() {
       $id: req.$id,
     });
     res.setHeader("x-twitshot-request-id", req.$id);
-    next();
-  });
 
-  app.use(morgan("combined"));
+    const info = {
+      ip: req.ip,
+      method: req.method,
+      url: req.url,
+      ua: req.headers["user-agent"],
+      referer: req.headers.referer,
+    };
+    req.$logger.debug(`START`, ..._toReqLogLine(info));
+
+    next();
+
+    res.once("finish", () => {
+      req.$logger.info(
+        `END`,
+        ..._toReqLogLine({
+          status: res.statusCode,
+          ...info,
+        }),
+      );
+    });
+  });
 
   app.use(bodyParserUrlencoded());
 
