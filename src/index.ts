@@ -22,12 +22,10 @@ import type { Request, Response } from "express";
 import { createClient } from "redis";
 import { Agent, type AtpSessionData, CredentialSession } from "@atproto/api";
 import { type PostView } from "@atproto/api/dist/client/types/app/bsky/feed/defs";
-import indexHtmlPath from "./assets/index.html";
-import embedHtmlPath from "./assets/embed.html";
-import faviconPath from "./assets/favicon.ico";
+import INDEX_HTML from "./assets/index.html" with { type: "text" };
+import EMBED_HTML from "./assets/embed.html" with { type: "text" };
+import faviconPath from "./assets/favicon.ico" with { type: "file" };
 
-const EMBED_HTML = await Bun.file(embedHtmlPath).text();
-const INDEX_HTML = await Bun.file(indexHtmlPath).text();
 const FAVICON_BLOB = await Bun.file(faviconPath).bytes();
 
 const BrowserInfo = BrowserDevices["Desktop Chrome"];
@@ -1656,7 +1654,7 @@ async function main() {
   });
 
   app.get("/favicon.ico", (_req, res) => {
-    res.end(FAVICON_BLOB);
+    res.setHeader("content-type", "image/x-icon").end(FAVICON_BLOB);
   });
 
   app.post("/", (req, res) => {
