@@ -4,7 +4,9 @@ import {
   type BrowserContextOptions,
   type Browser,
   type BrowserContext,
+  type ElementHandle,
 } from "playwright";
+import dns from "node:dns";
 import https from "node:https";
 import express from "express";
 import { urlencoded as bodyParserUrlencoded } from "body-parser";
@@ -21,8 +23,10 @@ import type { Request, Response } from "express";
 import { createClient } from "redis";
 import { Agent, type AtpSessionData, CredentialSession } from "@atproto/api";
 import { type PostView } from "@atproto/api/dist/client/types/app/bsky/feed/defs";
+import ipaddr from "ipaddr.js";
 import INDEX_HTML from "./assets/index.html" with { type: "text" };
 import EMBED_HTML from "./assets/embed.html" with { type: "text" };
+import INDEX_RAW_HTML_TEMPLATE from "./assets/index-raw.html" with { type: "text" };
 import faviconPath from "./assets/favicon.ico" with { type: "file" };
 
 const FAVICON_BLOB = await Bun.file(faviconPath).bytes();
@@ -42,6 +46,80 @@ const LOG_LEVELS_RANK = Object.fromEntries(
 type LogLevel = (typeof LOG_LEVELS)[number];
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info") as LogLevel;
 const LOG_LEVEL_REQUIRED_RANK = LOG_LEVELS_RANK[LOG_LEVEL];
+
+const BLOCKED_SUBNETS = [
+  ["0.0.0.0", 8, 4],
+  ["10.0.0.0", 8, 4],
+  ["100.64.0.0", 10, 4],
+  ["127.0.0.0", 8, 4],
+  ["169.254.0.0", 16, 4],
+  ["172.16.0.0", 12, 4],
+  ["192.0.0.0", 24, 4],
+  ["192.0.2.0", 24, 4],
+  ["192.88.99.0", 24, 4],
+  ["192.168.0.0", 16, 4],
+  ["198.18.0.0", 15, 4],
+  ["198.51.100.0", 24, 4],
+  ["203.0.113.0", 24, 4],
+  ["224.0.0.0", 4, 4],
+  ["233.252.0.0", 24, 4],
+  ["240.0.0.0", 4, 4],
+  ["255.255.255.255", 32, 4],
+  ["::", 128, 6],
+  ["::1", 128, 6],
+  ["::ffff:0:0", 96, 6],
+  ["::ffff:0:0:0", 96, 6],
+  ["64:ff9b::", 96, 6],
+  ["64:ff9b:1::", 48, 6],
+  ["100::", 64, 6],
+  ["2001:0000::", 32, 6],
+  ["2001:20::", 28, 6],
+  ["2001:db8::", 32, 6],
+  ["2002::", 16, 6],
+  ["fc00::", 7, 6],
+  ["fe80::", 10, 6],
+  ["fe80::", 64, 6],
+  ["ff00::", 8, 6],
+] satisfies [string, number, 4 | 6][];
+class IpBlockList {
+  private subnets: {
+    ipv4: [ipaddr.IPv4, number][];
+    ipv6: [ipaddr.IPv6, number][];
+  } = {
+    ipv4: [],
+    ipv6: [],
+  };
+  private _rules: string[] = [];
+
+  public get rules() {
+    return Object.freeze(this._rules);
+  }
+
+  public addSubnet(ip: string, prefix: number, _version?: `ipv${4 | 6}`) {
+    const [addr, subnet] = ipaddr.parseCIDR(`${ip}/${prefix}`);
+    this.subnets[addr.kind()].push([addr as never, subnet]);
+    this._rules.push(`Subnet ${addr.toNormalizedString()}/${subnet}`);
+    return this;
+  }
+
+  public check(ip: string, _version?: `ipv${4 | 6}`) {
+    const parsed = ipaddr.parse(ip);
+    const matchingTypeSubnets = this.subnets[parsed.kind()];
+
+    return matchingTypeSubnets.some((subnet) => parsed.match(subnet));
+  }
+
+  public getMatchingSubnets(ip: string) {
+    const parsed = ipaddr.parse(ip);
+    const matchingTypeSubnets = this.subnets[parsed.kind()];
+
+    return matchingTypeSubnets.filter((subnet) => parsed.match(subnet));
+  }
+}
+const BLOCKED_IPS_FILTER = new IpBlockList();
+for (const [ip, prefix, v] of BLOCKED_SUBNETS) {
+  BLOCKED_IPS_FILTER.addSubnet(ip, prefix, `ipv${v}`);
+}
 
 if (!LOG_LEVELS.includes(LOG_LEVEL)) {
   console.warn("Invalid LOG_LEVEL", LOG_LEVEL);
@@ -84,10 +162,10 @@ const SCREENSHOT_CONFIG = (() => {
   }
 })();
 
-type LoggerTag = Record<string, string | null>;
+type LoggerTags = Record<string, string | null | undefined>;
 class Logger {
   private logInstance = console.log;
-  private tags: Record<string, string | null> = {};
+  private tags: LoggerTags = {};
   private tagsStr = "";
 
   setLogger(log: (...args: any[]) => any) {
@@ -109,7 +187,7 @@ class Logger {
     );
   }
 
-  setTags(tags: LoggerTag | string) {
+  setTags(tags: LoggerTags | string) {
     if (typeof tags === "string") {
       tags = {
         [tags]: null,
@@ -125,13 +203,13 @@ class Logger {
     return this;
   }
 
-  clearTags(...tags: (keyof LoggerTag)[]) {
+  clearTags(...tags: (keyof LoggerTags)[]) {
     for (const tag of tags) {
       delete this.tags[tag];
     }
   }
 
-  subTagged(tags: LoggerTag | string) {
+  subTagged(tags: LoggerTags | string) {
     if (typeof tags === "string") {
       tags = {
         [tags]: null,
@@ -1693,6 +1771,368 @@ async function main() {
     return res.sendStatus(StatusCodes.OK);
   });
 
+  if (
+    !["false", "f", "0", "no"].includes(
+      process.env.ENABLE_RAW_SCREENSHOTS?.toLowerCase() as never,
+    )
+  ) {
+    type ScreenshotOption = {
+      title: string;
+      description?: string;
+      placeholder?: string;
+    } & (
+      | {
+          typeProps?: {
+            type: "text";
+          };
+        }
+      | {
+          typeProps: {
+            type: "number";
+            min?: number;
+            max?: number;
+            step?: number;
+          };
+        }
+    );
+    const _screenshotOptions = <T extends Record<string, ScreenshotOption>>(
+      x: T,
+    ) =>
+      x as {
+        [K in keyof T]: ScreenshotOption;
+      };
+    const screenshotOptions = _screenshotOptions({
+      selectElement: {
+        title: "Element to screenshot",
+        description:
+          "CSS selector for which element to screenshot. Will capture the entire element irregardless of page size.",
+      },
+      removeElements: {
+        title: "Elements to remove",
+        placeholder: "body > footer, #an-ad-banner, .my-annoying-element",
+        description:
+          "Comma-separated list of CSS selectors to remove from the page before taking the screenshot. Useful for removing annoying elements like login banners or simple ads.",
+      },
+      waitForElement: {
+        title: "Wait for element to be present",
+        description:
+          "CSS selector which determines which element to wait for to be present on the page before taking the screenshot. Useful for SPAs where the page is loaded asynchronously.",
+      },
+      pageWidthPx: {
+        title: "Page width",
+        placeholder: BROWSER_INFO.width.toString(),
+        description: "Width of the page in pixels.",
+        typeProps: {
+          type: "number",
+          min: 100,
+          max: 3000,
+          step: 10,
+        },
+      },
+      pageHeightPx: {
+        title: "Page height",
+        placeholder: BROWSER_INFO.height.toString(),
+        description: "Height of the page in pixels.",
+        typeProps: {
+          type: "number",
+          min: 100,
+          max: 3000,
+          step: 10,
+        },
+      },
+      pageScaleFactor: {
+        title: "Page scale factor",
+        placeholder: "1.5",
+        description:
+          'Scale factor of the page from 0.5 to 3. Used to "zoom" the page which in practice means smaller or clearer screenshots.',
+        typeProps: {
+          type: "number",
+          min: 0.5,
+          max: 3,
+          step: 0.5,
+        },
+      },
+    });
+
+    const INDEX_RAW_HTML = INDEX_RAW_HTML_TEMPLATE.replace(
+      "{{{ELEMENT_INPUTS}}}",
+      Object.entries(screenshotOptions)
+        .map(([name, el]) =>
+          `<p>
+            <label>
+              ${el.title}:
+              <br>
+              <input
+                name="$$$$${name}"
+                placeholder="${el.placeholder || "element#with-an-id.and-a-class-name"}"
+                style="width: 100%"
+                ${
+                  el.typeProps
+                    ? Object.entries(el.typeProps)
+                        .filter(([_k, v]) => v !== undefined)
+                        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+                        .join(" ")
+                    : ""
+                }
+                ${el.description ? `aria-describedby="_${name}-description"` : ""}
+              >
+            </label>
+            ${el.description ? `<span id="_${name}-description" style="font-size: 0.75em; margin-top: 0.5em; opacity: 0.75">${el.description}</span>` : ""}
+          </p>`.trim(),
+        )
+        .join("\n"),
+    );
+
+    app.get("/http-raw", (_req, res) => {
+      res.set("Content-Type", "text/html; charset=utf-8").end(INDEX_RAW_HTML);
+    });
+
+    app.post("/http-raw", (req, res) => {
+      if (!req.body || !req.body.url) {
+        return res.sendStatus(StatusCodes.UNSUPPORTED_MEDIA_TYPE);
+      }
+
+      const { url, ...queryParams } = req.body;
+
+      try {
+        new URL(req.body.url);
+      } catch {
+        return res.sendStatus(StatusCodes.BAD_REQUEST);
+      }
+
+      const urlParams = new URLSearchParams(
+        Object.entries(queryParams).filter(([_k, v]) =>
+          Boolean(v),
+        ) as string[][],
+      );
+
+      res.redirect(`/http-raw/${req.body.url}?${urlParams.toString()}`);
+    });
+
+    app.get(
+      "/http-raw/*",
+      speedLimiter,
+      (rreq, _res, next) => {
+        const req = rreq as AppRequest;
+        req.$logger.info("Got request to render", req.params[0]);
+        return next();
+      },
+      asyncReq(
+        async (req, res) => {
+          const logger = req.$logger.subTagged({ raw: null });
+          if (req.slowDown) {
+            res.setHeader("x-ratelimit-limit", req.slowDown.limit.toString());
+            res.setHeader("x-ratelimit-used", req.slowDown.used.toString());
+            if (req.slowDown.resetTime) {
+              res.setHeader(
+                "x-ratelimit-reset",
+                req.slowDown.resetTime.toISOString(),
+              );
+            }
+          }
+
+          const paramUrl = req.params[0];
+          if (!paramUrl) {
+            return res.sendStatus(StatusCodes.BAD_REQUEST);
+          }
+
+          const url = new URL(paramUrl);
+          url.search = new URL(req.url, "http://localhost").search;
+          for (const key of Array.from(url.searchParams.keys())) {
+            if (key.startsWith("$$")) {
+              url.searchParams.delete(key);
+            }
+          }
+          logger.setTags({ raw: url.toString() });
+
+          logger.debug("Raw URL", url.toString());
+
+          const urlDomain = url.hostname;
+
+          const resolveInfo = await new Promise<dns.LookupAddress[]>(
+            (resolve, reject) =>
+              dns.lookup(
+                urlDomain,
+                {
+                  all: true,
+                  verbatim: true,
+                  hints: dns.ADDRCONFIG | dns.V4MAPPED,
+                },
+                (err, data) => {
+                  if (err) {
+                    return reject(err);
+                  }
+
+                  resolve(data);
+                },
+              ),
+          ).catch((e) => {
+            logger.debug("DNS lookup failed", e);
+            return null;
+          });
+
+          logger.debug(
+            "Resolved",
+            urlDomain,
+            "to",
+            JSON.stringify(resolveInfo),
+          );
+
+          if (!resolveInfo) {
+            return res
+              .status(StatusCodes.BAD_REQUEST)
+              .send(`Could not resolve ${JSON.stringify(urlDomain)}`);
+          }
+
+          if (resolveInfo.some((x) => BLOCKED_IPS_FILTER.check(x.address))) {
+            return res
+              .status(StatusCodes.FORBIDDEN)
+              .send(
+                `Some domain IPs resolve to restricted IPs: ${resolveInfo.map((x) => x.address).join(", ")}`,
+              );
+          }
+
+          const userScreenshotOptions = Object.entries(req.query)
+            .map(([k, v]) => {
+              if (k.startsWith("$$") && typeof v === "string") {
+                return [k.slice(2), v] as const;
+              }
+
+              return null;
+            })
+            .filter(Boolean)
+            .reduce(
+              (acc, [k, v]) => {
+                (acc as Record<string, string>)[k] = v;
+                return acc;
+              },
+              {} as Readonly<{
+                [K in keyof typeof screenshotOptions]?: string;
+              }>,
+            );
+
+          const browserDims = browserDimensions({
+            width: userScreenshotOptions.pageWidthPx,
+            height: userScreenshotOptions.pageHeightPx,
+            scaleFactor: userScreenshotOptions.pageScaleFactor || 1.5,
+          });
+
+          logger.debug("Using browser dimensions", JSON.stringify(browserDims));
+
+          const context = await newBrowserContext({
+            storageState: {
+              cookies: [],
+              origins: [
+                {
+                  origin: url.origin,
+                  localStorage: [
+                    BSKY_SESSION_DATA
+                      ? {
+                          name: "BSKY_STORAGE",
+                          value: BSKY_SESSION_DATA,
+                        }
+                      : undefined,
+                  ].filter(Boolean),
+                },
+              ],
+            },
+            ...browserDims,
+          });
+          req.$browserContext = context;
+
+          const buffer = await (async (context, url) => {
+            logger.debug("Start rendering raw page", url.toString());
+            const page = await context.newPage();
+
+            await page.goto(url.toString());
+
+            if (userScreenshotOptions.waitForElement) {
+              logger.debug(
+                "Waiting for element",
+                userScreenshotOptions.waitForElement,
+              );
+              await page.waitForSelector(userScreenshotOptions.waitForElement);
+            }
+            logger.debug("Waiting for page to load");
+            await page.waitForLoadState("networkidle");
+            logger.debug("Page loaded. Processing page.");
+
+            const removeSelectors = userScreenshotOptions.removeElements
+              ?.split(",")
+              .map((x) => x.trim());
+
+            logger.debug(
+              "Removing elements...",
+              JSON.stringify(removeSelectors),
+            );
+            await page.evaluate((removeSelectors) => {
+              if (!removeSelectors) {
+                return;
+              }
+
+              for (const removeSelector of removeSelectors) {
+                document
+                  .querySelectorAll(removeSelector.trim())
+                  .forEach((element) => {
+                    element.remove();
+                  });
+              }
+            }, removeSelectors);
+
+            let elementToScreenshot = page as ElementHandle | typeof page;
+            if (userScreenshotOptions.selectElement) {
+              const element$ = await page.$(
+                userScreenshotOptions.selectElement,
+              );
+
+              if (!element$) {
+                logger.debug("Element not found.");
+                return res
+                  .status(StatusCodes.NOT_FOUND)
+                  .send("Element not found");
+              }
+
+              elementToScreenshot = element$;
+            }
+
+            logger.debug("Taking screenshot...");
+            return elementToScreenshot.screenshot(SCREENSHOT_CONFIG);
+          })(context, url).catch((e: unknown) => {
+            logger.debug("Error taking screenshot", e);
+            return null;
+          });
+
+          logger.debug("Screenshot taken", Boolean(buffer));
+
+          if (!buffer) {
+            return res.sendStatus(StatusCodes.NOT_FOUND);
+          }
+
+          if (!Buffer.isBuffer(buffer)) {
+            return buffer;
+          }
+
+          res.setHeader("Content-Type", `image/${SCREENSHOT_CONFIG.type}`);
+          res.setHeader("Content-Length", buffer.length);
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.setHeader(
+            "Cache-Control",
+            `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
+          );
+          res.setHeader(
+            "Content-Disposition",
+            `inline; filename="raw.${Buffer.from(url.origin).toString("base64url")}.${Date.now().toString(36)}.${SCREENSHOT_CONFIG.type}"`,
+          );
+
+          return res.end(buffer);
+        },
+        (req) => {
+          req.$logger.info("Done with rendering", req.params[0]);
+        },
+      ),
+    );
+  }
+
   app.get(
     "/*",
     speedLimiter,
@@ -1724,7 +2164,11 @@ async function main() {
               parsedUrl = new URL(twitterUrl);
             }
           } catch (e) {
-            req.$logger.debug("URL parse failed", twitterUrl, e);
+            req.$logger.debug(
+              "URL parse failed",
+              JSON.stringify(twitterUrl),
+              String(e),
+            );
           }
         }
 
@@ -1787,6 +2231,10 @@ async function main() {
 
   app.listen(PORT, HOST, () => {
     globalLogger.info("Environment:", JSON.stringify(process.env));
+    globalLogger.info(
+      `Blocked scrape IPs:`,
+      BLOCKED_IPS_FILTER.rules.join(", "),
+    );
     globalLogger.info(`Listening on http://${HOST}:${PORT}`);
   });
 }

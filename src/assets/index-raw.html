@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" style="color-scheme: light dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Screenshot Page</title>
+  </head>
+
+  <body style="font-family: sans-serif; font-size: 22px">
+    <form method="POST" action="/http-raw">
+      <fieldset style="max-width: 400px; margin: 0 auto">
+        <legend>
+          <h1>Screenshot page</h1>
+        </legend>
+        <p>
+          <label>
+            Page URL:
+            <br />
+            <input
+              type="url"
+              name="url"
+              required
+              placeholder="https://twitter.com/jack/status/20"
+              style="width: 100%"
+            />
+          </label>
+        </p>
+        <details style="font-size: 0.75em">
+          <summary style="cursor: pointer">Screenshot options</summary>
+          <hr />
+          <div style="margin: 0 0.5em; padding 0 0.5em">
+            {{{ELEMENT_INPUTS}}}
+          </div>
+        </details>
+        <p>
+          <input type="submit" value="Screenshot" />
+        </p>
+      </fieldset>
+    </form>
+  </body>
+</html>
