@@ -66,10 +66,17 @@ export async function respondWithScreenshot({
   cacheForSecs?: number;
 }) {
   req.$browserContext = await (createBrowserContext ?? newBrowserContext)();
-  const buffer = await handler(req.$browserContext, url, logger).catch((e) => {
+
+  let buffer = null;
+  try {
+    buffer = await handler(req.$browserContext, url, logger);
+  } catch (e) {
+    if (e instanceof ScreenshotResponseError) {
+      return res.sendStatus(e.statusCode).end(e.body);
+    }
+
     logger.debug("Error taking screenshot", String(e));
-    return null;
-  });
+  }
 
   logger.debug("Screenshot taken", Boolean(buffer));
 
