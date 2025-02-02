@@ -230,42 +230,21 @@ export const handleScreenshotRawProcess: AppHandler = async (req, res) => {
       }>,
     );
 
-  const browserDims = browserDimensions({
-    width: userScreenshotOptions.pageWidthPx,
-    height: userScreenshotOptions.pageHeightPx,
-    scaleFactor: userScreenshotOptions.pageScaleFactor || 1.5,
-  });
-
-  logger.debug("Using browser dimensions", JSON.stringify(browserDims));
-
-  const context = await newBrowserContext({
-    storageState: {
-      cookies: [],
-      origins: [
-        {
-          origin: url.origin,
-          localStorage: [
-            BSKY_SESSION_DATA
-              ? {
-                  name: "BSKY_STORAGE",
-                  value: BSKY_SESSION_DATA,
-                }
-              : undefined,
-          ].filter(Boolean),
-        },
-      ],
-    },
-    ...browserDims,
-  });
-  req.$browserContext = context;
-
   return respondWithScreenshot({
     logger,
     req,
     res,
     url,
-    createBrowserContext: () =>
-      newBrowserContext({
+    createBrowserContext: () => {
+      const browserDims = browserDimensions({
+        width: userScreenshotOptions.pageWidthPx,
+        height: userScreenshotOptions.pageHeightPx,
+        scaleFactor: userScreenshotOptions.pageScaleFactor || 1.5,
+      });
+
+      logger.debug("Using browser dimensions", JSON.stringify(browserDims));
+
+      return newBrowserContext({
         storageState: {
           cookies: [],
           origins: [
@@ -283,7 +262,8 @@ export const handleScreenshotRawProcess: AppHandler = async (req, res) => {
           ],
         },
         ...browserDims,
-      }),
+      });
+    },
     handler: async (context, url) => {
       logger.debug("Start rendering raw page", url.toString());
       const page = await context.newPage();

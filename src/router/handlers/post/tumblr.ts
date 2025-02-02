@@ -14,9 +14,6 @@ export const handleTumblrPost: RequestHandler = async (req, res, url) => {
   }
   logger.debug("Tumblr URL", url.toString());
 
-  const context = await newBrowserContext();
-  req.$browserContext = context;
-
   return respondWithScreenshot({
     logger,
     req,
