@@ -235,6 +235,7 @@ export const handleScreenshotRawProcess: AppHandler = async (req, res) => {
     req,
     res,
     url,
+    cacheForSecs: 30 * 60, // 30 mins
     createBrowserContext: () => {
       const browserDims = browserDimensions({
         width: userScreenshotOptions.pageWidthPx,

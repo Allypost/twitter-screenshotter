@@ -50,6 +50,7 @@ export async function respondWithScreenshot({
   res,
   handler,
   filenameFn,
+  cacheForSecs = SEND_CACHE_HEADER_FOR_SECONDS,
 }: {
   logger: Logger;
   createBrowserContext?: () => Promise<BrowserContext>;
@@ -62,6 +63,7 @@ export async function respondWithScreenshot({
     logger: Logger,
   ) => Promise<Buffer | null | undefined>;
   filenameFn: () => string;
+  cacheForSecs?: number;
 }) {
   req.$browserContext = await (createBrowserContext ?? newBrowserContext)();
   const buffer = await handler(req.$browserContext, url, logger).catch((e) => {
@@ -80,7 +82,7 @@ export async function respondWithScreenshot({
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
     "Cache-Control",
-    `public, max-age=${SEND_CACHE_HEADER_FOR_SECONDS}, s-max-age=${SEND_CACHE_HEADER_FOR_SECONDS}`,
+    `public, max-age=${cacheForSecs}, s-max-age=${cacheForSecs}`,
   );
   res.setHeader(
     "Content-Disposition",
