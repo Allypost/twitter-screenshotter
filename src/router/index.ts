@@ -144,8 +144,8 @@ export async function createRouter({ logger }: { logger: Logger }) {
   });
 
   if (CONFIG.ENABLE_RAW_SCREENSHOTS) {
-    app.get("/http-raw", handleScreenshotRawHome as never);
-    app.post("/http-raw", handleScreenshotRawPost as never);
+    app.get("/raw", handleScreenshotRawHome as never);
+    app.post("/raw", handleScreenshotRawPost as never);
     app.get(
       "/http-raw/*",
       speedLimiter,
