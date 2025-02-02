@@ -32,6 +32,10 @@ const FAVICON_BLOB = await Bun.file(faviconPath).bytes();
 
 const BrowserInfo = BrowserDevices["Desktop Chrome"];
 
+const APPLICATION_INFO =
+  process.env.APPLICATION_INFO ||
+  "twitshot <https://github.com/allypost/twitter-screenshotter>";
+
 const HOST = process.env.HOST || "localhost";
 const PORT = Number(process.env.PORT || 8080);
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error"] as const;
@@ -181,20 +185,46 @@ type AppRequest = Request & {
 
 type AppResponse = Response;
 
+const browserDimensions = ({
+  width,
+  height,
+  scaleFactor,
+}: {
+  width?: string | number | null | undefined;
+  height?: string | number | null | undefined;
+  scaleFactor?: string | number | null | undefined;
+} = {}) => {
+  const clamp = (value: number, min: number, max: number) => {
+    return Math.min(Math.max(value, min), max);
+  };
+
+  const s = clamp(Number(scaleFactor || BROWSER_INFO.scaleFactor), 0.5, 3);
+  const w = clamp(Number(width || BROWSER_INFO.width), 100, 3000) * s;
+  const h = clamp(Number(height || BROWSER_INFO.height), 100, 3000) * s;
+
+  return {
+    viewport: {
+      width: w,
+      height: h,
+    },
+    screen: {
+      width: w,
+      height: h,
+    },
+    deviceScaleFactor: s,
+  } satisfies BrowserContextOptions;
+};
+
 const newBrowserContext = (options?: BrowserContextOptions) => {
   return BROWSER.newContext({
     acceptDownloads: false,
     locale: "en-US",
-    viewport: {
-      width: BROWSER_INFO.width * BROWSER_INFO.scaleFactor,
-      height: BROWSER_INFO.height * BROWSER_INFO.scaleFactor,
-    },
-    screen: {
-      width: BROWSER_INFO.width * BROWSER_INFO.scaleFactor,
-      height: BROWSER_INFO.height * BROWSER_INFO.scaleFactor,
-    },
-    deviceScaleFactor: BROWSER_INFO.scaleFactor,
     colorScheme: "dark",
+    extraHTTPHeaders: {
+      "x-application": APPLICATION_INFO,
+      "x-is-twitshot": "true",
+    },
+    ...browserDimensions(),
     // reducedMotion: "reduce",
     ...options,
   }).then((ctx) => {
@@ -1484,7 +1514,7 @@ async function main() {
             password: accPassword,
           })
           .catch((e) => {
-            console.error("Error logging into bsky", e);
+            globalLogger.error("Error logging into bsky", e);
           });
       } else if (refreshJwt) {
         globalLogger.info("Logging into BSKY using refresh token");
@@ -1740,6 +1770,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error(e);
+  globalLogger.error(e);
   process.exit(1);
 });
