@@ -51,6 +51,7 @@ export const browserDimensions = ({
 export function newBrowserContext(options?: BrowserContextOptions) {
   return BROWSER.newContext({
     acceptDownloads: false,
+    bypassCSP: true,
     locale: "en-US",
     colorScheme: "dark",
     extraHTTPHeaders: {
