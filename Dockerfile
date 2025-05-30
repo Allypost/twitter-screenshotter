@@ -21,8 +21,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 # Install PM2 (process manager)
 RUN npm i -g pm2
-RUN npx playwright install-deps
-RUN npx playwright install firefox
+RUN npx playwright install-deps \
+  && npx playwright install firefox \
+  ;
 COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=build /app/dist/server ./
 # Install dependencies for playwright
