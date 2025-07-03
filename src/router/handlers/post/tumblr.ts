@@ -1,4 +1,3 @@
-import { newBrowserContext } from "~/services/browser";
 import {
   respondWithScreenshot,
   SCREENSHOT_CONFIG,
@@ -7,11 +6,10 @@ import {
 
 export const handleTumblrPost: RequestHandler = async (req, res, url) => {
   const logger = req.$logger.subTagged("tumblr");
-  {
-    // /post/<user>/<post-id>(/<post-slug>)
-    const [_constPostStr, postUser, postId] = url.pathname.split("/");
-    logger.setTags({ tumblr: `${postId}@${postUser}` });
-  }
+  // /<user>/<post-id>(/<post-slug>)
+  const [_constPostStr, postUser, postId] = url.pathname.split("/");
+
+  logger.setTags({ tumblr: `${postId}@${postUser}` });
   logger.debug("Tumblr URL", url.toString());
 
   return respondWithScreenshot({
@@ -30,7 +28,7 @@ export const handleTumblrPost: RequestHandler = async (req, res, url) => {
       await page.waitForLoadState("networkidle");
 
       const post$ = await page
-        .$('article:has(header[role="banner"] + div + div)')
+        .$(`*[data-id="${postId}"] article:has(header + div + div)`)
         .catch((e) => {
           logger.debug("Error getting banner", e);
         });
@@ -182,10 +180,6 @@ export const handleTumblrPost: RequestHandler = async (req, res, url) => {
       logger.debug("Screenshot post");
       return post$.screenshot(SCREENSHOT_CONFIG);
     },
-    filenameFn: () => {
-      const [username, postId] = url.pathname.replace(/^\/*/, "").split("/");
-
-      return `tumblr.${username}.${postId}`;
-    },
+    filenameFn: () => `tumblr.${postUser}.${postId}`,
   });
 };
